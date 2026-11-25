@@ -1,131 +1,39 @@
-# Simple AI Browser (SAB) — Full System Architecture Blueprint
+# Simple AI Browser (SAB) — System Architecture & Opera Parity Analysis
 
-**Goal:** Replicate the clean, modular **Opera Mobile** browser architecture (UI shell, ergonomic bottom-bar navigation, Speed Dial, Tab Islands, AdBlock, and integrated AI panel), while **swapping the rendering engine from Chromium/Blink to pre-compiled Mozilla GeckoView 159+ (`geckoview-arm64-v8a`, non-omni, Android 10+)**.
+## 1. Architectural Strategy: Opera Mobile Shell × Mozilla GeckoView Engine
 
----
+Opera Mobile's longevity and responsiveness stem from a **strict separation between the Browser Shell (UI, Tabs, Speed Dial, Privacy Controls) and the Rendering Engine**. SAB replicates this exact production pattern while swapping Chromium/Blink for pre-compiled **Mozilla GeckoView 161+ (`geckoview-arm64-v8a`, non-omni)**.
 
-## 1. High-Level Layered Architecture (Opera Pattern → SAB Implementation)
+### Layer Breakdown
 
-Opera Mobile's engineering strength comes from a **strict boundary between the Browser Shell (UI + Features) and the Rendering Engine**. SAB mirrors this exact separation:
+1. **Presentation Layer (`com.simpleaibrowser.sab.ui`)**
+   - Pure Jetpack Compose + Material 3 shell (`SabBrowserApp`, `SpeedDialStartPage`, `TabGalleryScreen`, `OperaMenuBottomSheet`, `PrivacyShieldSheet`, `LibraryScreen`, `SettingsScreen`).
+   - Observes reactive `StateFlow` state from `BrowserViewModel`.
+   - **Zero direct imports** of `org.mozilla.geckoview.*` or `android.webkit.*`.
+   - `EngineViewport` attaches and detaches the active `BrowserTabSession` cleanly through `BrowserEngine.createRenderView(context)`.
 
-```text
-+-------------------------------------------------------------------------+
-|  LAYER 1: PRESENTATION & OPERA-INSPIRED SHELL (:app / :feature-*)       |
-|  - Splash Intro (Android 12+ SplashScreen + Animated Vector / Compose)  |
-|  - Start Page (Speed Dial Grid, Theme Presets, Unified Omnibox)         |
-|  - 5-Slot Bottom Nav Bar (Back, Search, SAB AI Orb, Tabs, Menu Sheet)   |
-|  - Visual Tab Gallery & Tab Islands + Private Mode                      |
-|  - SAB AI Contextual Bottom Sheet                                       |
-+------------------------------------+------------------------------------+
-                                     | Observes StateFlow / Dispatches Commands
-                                     v
-+-------------------------------------------------------------------------+
-|  LAYER 2: ENGINE-AGNOSTIC BROWSER CORE (:core-browser)                  |
-|  - BrowserEngine interface       - BrowserTabSession interface          |
-|  - TabManager & TabIslandStore   - NavigationState / SecurityState      |
-|  - PageContextSnapshot           - ContentBlockingStats                 |
-|  (Zero imports from org.mozilla.geckoview or android.webkit!)           |
-+------------------------------------+------------------------------------+
-                                     | Implemented by
-                                     v
-+-------------------------------------------------------------------------+
-|  LAYER 3: GECKOVIEW 159+ ENGINE ADAPTER (:engine-gecko)                 |
-|  - org.mozilla.geckoview:geckoview-arm64-v8a:159+ (non-omni, API 29+)   |
-|  - GeckoEngineAdapter            - GeckoTabSession                      |
-|  - GeckoRuntime Singleton        - Delegate-to-Flow Mappers             |
-|  - Built-in WebExtension ("sab-bridge") for DOM text & Reader/Dark CSS  |
-+-------------------------------------------------------------------------+
+2. **Engine-Agnostic Browser Core (`com.simpleaibrowser.sab.core.browser`)**
+   - Defines `BrowserEngine`, `BrowserTabSession`, `TabUiState`, `TabIsland`, `SecurityState`, `SearchEngine`, `ThemePreset`, `EngineInfo`, and `PageContextSnapshot`.
+   - Includes `UrlResolver` (smart omnibox URL/search disambiguation + HTTPS-Only upgrading) and `AdBlockFilterList`.
 
-+------------------------------------+------------------------------------+
-|  LAYER 4: AI ORCHESTRATION         |  LAYER 5: LOCAL DATA & SECURITY    |
-|  (:core-ai)                        |  (:core-data)                      |
-|  - Context Builder (URL + DOM)     |  - Room DB (SpeedDial, History,    |
-|  - Gemini API Client (Server/BYOK) |    Bookmarks, TabIslands, Stats)   |
-|  - Prompt Templates (Summarize,    |  - Android Keystore / Encrypted    |
-|    Translate, Explain, Compare)    |    Prefs for user secrets          |
-+------------------------------------+------------------------------------+
-```
+3. **Engine Layer (`com.simpleaibrowser.sab.engine`)**
+   - `GeckoEngineAdapter` & `GeckoTabSession`: Singleton `GeckoRuntime` configured with Enhanced Tracking Protection (`AD | ANALYTIC | SOCIAL | CRYPTOMINING | FINGERPRINTING`), Safe Browsing, `ACCEPT_NON_TRACKERS` cookies, and built-in `sab-bridge` WebExtension.
+   - `BrowserEngineFactory`: Always initializes `GeckoEngineAdapter` on `arm64-v8a` Android 10+ devices. Includes `CompatWebViewEngine` purely as a non-ARM64 host guard so x86_64 dev containers remain functional without crashing.
 
----
+4. **Local Persistence Layer (`com.simpleaibrowser.sab.data`)**
+   - **Room (`SabDatabase`)**: `speed_dials`, `bookmarks`, and `history` tables exposed via reactive Kotlin `Flow`.
+   - **Jetpack DataStore (`BrowserPreferences`)**: AdBlock toggle, HTTPS-Only mode, Force Dark default, default Search Engine, Theme Preset, Start Page wallpaper toggle, and cumulative blocked-tracker telemetry.
 
-## 2. Android Multi-Module Project Structure (Target Native Tree)
+## 2. Opera Mobile UX Feature Parity Matrix
 
-```text
-android/
-├── app/                              # Application entry, DI graph, Splash, MainActivity
-├── core-browser/                     # Pure Kotlin engine-agnostic contracts & TabManager
-├── core-ai/                          # AI Composer layer (context extraction + Gemini calls)
-├── core-data/                        # Room database, DataStore preferences, Keystore
-├── engine-gecko/                     # GeckoView 159+ arm64-v8a non-omni implementation
-│   └── src/main/assets/extensions/
-│       └── sab-bridge/               # Built-in WebExtension (DOM reader, dark mode, bridge)
-├── feature-shell/                    # Opera-style Bottom Bar, Omnibox, Menu Bottom Sheet
-├── feature-speeddial/                # Speed Dial grid, tile shapes, personalization
-├── feature-tabs/                     # Tab Gallery, Tab Islands, Private Tabs switcher
-└── feature-ai/                       # SAB AI Bottom Sheet & selected-text quick actions
-```
+| Opera Mobile Pattern | SAB Implementation |
+|---|---|
+| 5-Slot Bottom Thumb-Zone Navigation | `OperaBottomBar`: Back, Home, glowing Center Fast Action Search Orb (long-press = New Tab), Tab Counter Badge, Opera Menu |
+| Start Page & Speed Dial | `SpeedDialStartPage`: Atmospheric obsidian wallpaper, live Privacy Shield pill, 4-column customizable Speed Dial grid, Quick Actions |
+| Tab Gallery + Tab Islands | `TabGalleryScreen`: Regular / Islands / Private switcher, Grid & List views, live tab search, automatic child-tab grouping into colored Islands, manual Island creation/collapse/close, Recently Closed undo stack |
+| Built-in Ad & Tracker Blocker | GeckoView Enhanced Tracking Protection + Safe Browsing + live per-tab & lifetime counter in `PrivacyShieldSheet` |
+| Force Dark & Reader Focus | Native CSS injection via built-in `sab-bridge` GeckoView WebExtension |
+| Personalization | 4 Material 3 Theme Presets (`Obsidian Crimson`, `Midnight Cobalt`, `Aurora Velvet`, `Daylight Studio`) + custom bundled typography |
 
----
-
-## 3. Core Engine-Swap Contract (`:core-browser`)
-
-Copying Opera's shell decoupling means **no UI screen ever imports `GeckoSession` directly**:
-
-```kotlin
-package com.rajdevlab.sab.core.browser
-
-import kotlinx.coroutines.flow.StateFlow
-
-data class TabUiState(
-    val id: String,
-    val islandId: String? = null,
-    val title: String = "New Tab",
-    val url: String = "sab://start",
-    val isPrivate: Boolean = false,
-    val isLoading: Boolean = false,
-    val progress: Int = 0,
-    val canGoBack: Boolean = false,
-    val canGoForward: Boolean = false,
-    val isSecure: Boolean = true,
-    val blockedTrackersCount: Int = 0
-)
-
-interface BrowserTabSession {
-    val state: StateFlow<TabUiState>
-    fun loadUrl(urlOrQuery: String)
-    fun goBack()
-    fun goForward()
-    fun reload()
-    fun stopLoading()
-    suspend fun extractPageText(maxChars: Int = 12_000): PageContextSnapshot
-    fun setDesktopMode(enabled: Boolean)
-    fun setReaderMode(enabled: Boolean)
-    fun setForceDarkMode(enabled: Boolean)
-    fun release()
-}
-
-interface BrowserEngine {
-    val engineName: String // "GeckoView 159 (arm64-v8a)"
-    fun createSession(tabId: String, isPrivate: Boolean): BrowserTabSession
-    fun setAdBlockEnabled(enabled: Boolean)
-    fun clearBrowsingData()
-}
-```
-
-### Why This Design Wins
-1. **Clean Opera UI Parity:** `:feature-shell`, `:feature-tabs`, and `:feature-speeddial` only observe `StateFlow<TabUiState>`.
-2. **Zero Engine Lock-in:** Every GeckoView delegate (`NavigationDelegate`, `ProgressDelegate`, `ContentBlocking.Delegate`, `ScrollDelegate`) lives isolated inside `:engine-gecko`.
-3. **AI-First Context Hooks:** Any AI feature in `:feature-ai` simply calls `activeTab.extractPageText()`—powered cleanly under the hood by our `sab-bridge` WebExtension on GeckoView.
-
----
-
-## 4. Splash Screen & Brand Motion Specification
-
-- **Android 10–11 Fallback & Android 12+ (`androidx.core:core-splashscreen`):**
-  - Background: `#0B0D12` (Obsidian Matte)
-  - Icon Layer: SAB Crimson/Silver geometric emblem (`288dp` adaptive icon safe-zone `108dp` circle)
-  - **In-App Reveal Sequence (650ms total):**
-    1. `0ms–220ms`: Orbital ring scales `0.86 → 1.0` with `CubicBezier(0.16, 1, 0.3, 1)` + opacity `0 → 1`.
-    2. `160ms–420ms`: Inner S-aperture prism rotates `-14° → 0°` into lock.
-    3. `320ms–650ms`: `"SAB"` / `"Simple AI Browser"` wordmark settles upward (`12dp → 0dp`) and cross-fades cleanly into the Start Page Speed Dial.
-  - Supports `prefers-reduced-motion` / `AnimatorDurationScale == 0` by skipping directly to the settled Start Page.
+## 3. Future-Ready AI Extension Point (Phase 3)
+`BrowserTabSession.extractPageSnapshot()` and `sab-bridge/content.js` (`EXTRACT_SNAPSHOT`) are already wired into the engine boundary so future AI capabilities (page summarization, contextual Q&A, translation, Tab Island comparison) plug in as an independent module without touching any GeckoView rendering code.

@@ -1,22 +1,30 @@
 # Changelog
 
-All notable changes to **Simple AI Browser (SAB)** are documented in this file.
+All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
+This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses [Semantic Versioning](https://semver.org/).
-
-## [1.0.0] - 2026-11-25
-
-### Added
-- **Full-Stack Live Web Browser (`server.ts` + `src/`):**
-  - SSRF-hardened live webpage fetcher (`POST /api/browse`) with private/loopback IP blocking, tracker/script stripping, and safe structured DOM rendering.
-  - Live DuckDuckGo web search (`POST /api/search`) and clickable result browsing.
-  - Contextual **SAB AI** assistant (`POST /api/ai`) powered by `@google/genai` (`gemini-4-hydrogen`) reading the active webpage or using Google Search grounding.
-  - Opera-Mobile-inspired shell: 5-slot bottom navigation bar, customizable Speed Dial (Squircle/Circle/Square tiles + custom shortcuts), Tab Gallery with Tab Islands & Private Tabs, Bookmarks & History persistence, Reader Mode, Desktop UA toggle, Find in Page, and page text export.
-- **SAB Brand & Splash Animation:** Custom geometric SAB emblem and choreographed boot splash screen.
-- **Native Android GeckoView 159+ Blueprint (`android/`):** Multi-module Kotlin/Compose starter (`:app`, `:core-browser`, `:engine-gecko`) configured for `org.mozilla.geckoview:geckoview-arm64-v8a:159+` (non-omni), `minSdk = 29` (Android 10+), `arm64-v8a`, and `sab-bridge` WebExtension.
-- **Repository Standards:** GitHub Actions CI workflow, issue/PR templates, and `CHANGELOG.md`.
-
-## [0.1.0] - 2026-11-25
+## [1.1.0] - 2026-11-25
 
 ### Added
-- Initial repository scaffold, Apache-2.0 `LICENSE`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `docs/SETUP.md`.
+- **Native Android Browser Application (`com.simpleaibrowser.sab`)** targeting Android 10+ (`minSdk 29`, `targetSdk 36`).
+- **Pre-compiled Mozilla GeckoView 161.0 (`geckoview-arm64-v8a`, non-omni)** rendering adapter with Enhanced Tracking Protection, Safe Browsing, and cookie isolation.
+- **Built-in `sab-bridge` WebExtension** (`app/src/main/assets/extensions/sab-bridge/`) enabling Force Dark CSS injection, Reader Focus layout, and future DOM context snapshots.
+- **Engine-Agnostic Core (`core/browser/`)** enforcing strict decoupling between the Compose UI shell and engine implementation, plus automatic host ABI compatibility guard.
+- **Opera Mobile-Inspired UI Shell**:
+  - 5-slot thumb-zone bottom navigation bar with Fast Action Search Orb and live Tab Counter badge.
+  - Customizable 4-column Speed Dial Start Page with atmospheric wallpaper and Privacy Shield telemetry.
+  - Tab Gallery with Regular, Tab Islands, and Private sections, Grid/List layout toggle, live tab search, automatic Tab Island grouping, and Recently Closed undo.
+  - Opera Control Sheet, Privacy Shield Detail Sheet, Bookmarks & History Library, and Browser Settings with GeckoView Diagnostics.
+- **Brand Identity & Motion**: Custom adaptive SAB prism launcher icon, circular legacy mipmaps, bundled `Space Grotesk` / `Plus Jakarta Sans` / `JetBrains Mono` typography, 4 Material 3 theme presets, and animated orbital splash reveal.
+- **Local Persistence**: Room database (`SabDatabase`) for Speed Dials, Bookmarks, and History; Jetpack DataStore for preferences and shield counters.
+- **CI & Documentation**: GitHub Actions Android CI workflow, architecture deep-dive docs, GeckoView guide, and unit/Robolectric tests.
+
+## [1.0.0] - 2026-11-24
+
+### Added
+- Initial architecture prototype, Opera UI layout analysis, and GeckoView 159+ technical blueprint.
+
+## [0.1.0] - 2026-11-24
+
+### Added
+- Initial repository bootstrap, documentation structure, and MIT license.

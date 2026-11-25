@@ -1,33 +1,31 @@
-# Contributing to Simple AI Browser
+# Contributing to Simple AI Browser (SAB)
 
-Thank you for contributing to **Simple AI Browser**!
+Thank you for your interest in contributing to **Simple AI Browser (SAB)**!
 
-## Getting Started
+## Engineering Principles
 
-1. Fork the repository or create a feature branch from `main`:
+1. **Preserve the Engine Boundary**: Never import `org.mozilla.geckoview.*` or `android.webkit.*` inside `core/browser/` or `ui/`. All engine interactions must pass through `BrowserEngine` and `BrowserTabSession`.
+2. **GeckoView First**: Keep `org.mozilla.geckoview:geckoview-arm64-v8a` (non-omni, 159+) as the primary rendering engine for Android 10+ ARM64 devices.
+3. **Privacy by Default**: Never add third-party telemetry, analytics SDKs, or unencrypted secret storage.
+4. **Conventional Commits**: Format commit messages using Conventional Commits:
+   - `feat(tabs): add drag-to-group tab island gesture`
+   - `fix(gecko): handle custom scheme redirects safely`
+   - `docs(arch): document sab-bridge native messaging protocol`
+   - `chore(ci): update Gradle cache configuration`
+
+## Workflow
+
+1. Fork the repository and create a feature branch from `main`:
    ```bash
    git checkout -b feat/your-feature-name
    ```
-2. Install dependencies:
+2. Build and run tests locally:
    ```bash
-   npm install
+   ./gradlew :app:assembleDebug :app:testDebugUnitTest
    ```
-3. Copy `.env.example` to `.env` and add your `GEMINI_API_KEY`.
-4. Run the dev server:
-   ```bash
-   npm run dev
-   ```
+3. Open a Pull Request using the PR template and link any relevant issue.
 
-## Before Opening a Pull Request
-
-- Run type checks and verify the production build:
-  ```bash
-  npm run lint
-  npm run build
-  ```
-- Never commit `.env`, API keys, or personal access tokens.
-- Keep commits focused and write clear commit messages (for example: `feat: add tab bar`, `docs: update setup guide`).
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](./LICENSE).
+## Code Style
+- Kotlin official code style with Jetpack Compose Material 3.
+- Keep composables stateless and hoist state into `BrowserViewModel`.
+- Include `contentDescription` and `testTag` modifiers on interactive controls.

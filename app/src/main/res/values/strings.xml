@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">Simple AI Browser</string>
+    <string name="app_short_name">SAB</string>
+    <string name="app_tagline">Fast, private GeckoView browser</string>
+    <string name="omnibox_placeholder">Search or enter web address</string>
+    <string name="omnibox_private_placeholder">Private search or URL</string>
+    <string name="nav_back">Navigate back</string>
+    <string name="nav_forward">Navigate forward</string>
+    <string name="nav_home">Speed Dial Home</string>
+    <string name="nav_search">Quick Search</string>
+    <string name="nav_tabs">Open tab gallery</string>
+    <string name="nav_menu">Browser menu</string>
+    <string name="action_reload">Reload page</string>
+    <string name="action_stop">Stop loading</string>
+    <string name="action_clear">Clear text</string>
+    <string name="action_share">Share page</string>
+    <string name="action_bookmark">Toggle bookmark</string>
+    <string name="action_find_in_page">Find in page</string>
+    <string name="action_new_tab">New tab</string>
+    <string name="action_new_private_tab">New private tab</string>
+    <string name="action_add_speed_dial">Add to Speed Dial</string>
+    <string name="action_close_tab">Close tab</string>
+    <string name="tab_gallery_title">Tab Gallery</string>
+    <string name="tab_islands_title">Tab Islands</string>
+    <string name="private_tabs_title">Private</string>
+    <string name="bookmarks_title">Bookmarks</string>
+    <string name="history_title">History</string>
+    <string name="settings_title">Browser Settings</string>
+    <string name="shield_title">Privacy Shield</string>
+    <string name="ad_blocker_label">Ad &amp; Tracker Blocker</string>
+    <string name="desktop_site_label">Desktop site</string>
+    <string name="force_dark_label">Force dark web pages</string>
+    <string name="reader_mode_label">Reader focus mode</string>
+    <string name="https_only_label">HTTPS-Only upgrades</string>
+    <string name="clear_data_label">Clear browsing data</string>
+    <string name="engine_label">Rendering Engine</string>
+</resources>

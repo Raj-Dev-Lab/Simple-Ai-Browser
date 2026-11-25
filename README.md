@@ -1,130 +1,101 @@
-# Simple AI Browser
+# Simple AI Browser (SAB)
 
-A clean, fast AI-powered web browsing and research workspace built with React, TypeScript, Vite, Tailwind CSS, and the Gemini SDK.
+[![Android CI](https://github.com/Raj-Dev-Lab/Simple-Ai-Browser/actions/workflows/android-ci.yml/badge.svg)](https://github.com/Raj-Dev-Lab/Simple-Ai-Browser/actions/workflows/android-ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-crimson.svg)](LICENSE)
+[![Engine: GeckoView 161+](https://img.shields.io/badge/Engine-GeckoView%20161%20arm64--v8a-blue.svg)](docs/GECKOVIEW_ENGINE.md)
+[![Platform: Android 10+](https://img.shields.io/badge/Android-10%2B%20(API%2029%2B)-3DDC84.svg)](app/build.gradle.kts)
 
----
+**Simple AI Browser (SAB)** is an open-source, privacy-first Android web browser engineered with an **Opera Mobile-inspired ergonomic shell** on top of pre-compiled **Mozilla GeckoView 161+ (`geckoview-arm64-v8a`, non-omni)**.
 
-## Workspace Status
-
-This repository includes:
-
-- **Live Full-Stack Web Browser (`server.ts` + `src/`):** SSRF-hardened live webpage fetcher, DuckDuckGo live web search, Gemini `gemini-4-hydrogen` contextual AI sheet, Opera-style 5-slot bottom bar, customizable Speed Dial, Tab Islands, Private Tabs, Bookmarks & History, Reader Mode, and Find in Page
-- **Android GeckoView 159+ App (`android/`):** Multi-module Kotlin/Jetpack Compose project (`:app`, `:core-browser`, `:engine-gecko`) using `org.mozilla.geckoview:geckoview-arm64-v8a:159+` (non-omni), `minSdk = 29` (Android 10+), `arm64-v8a`, and `sab-bridge` WebExtension
-- **Architecture & Engineering Docs (`docs/`):** Opera Mobile UI teardown (`docs/OPERA_UI_ANALYSIS.md`), GeckoView 159+ integration guide (`docs/GECKOVIEW_ENGINE.md`), and decoupled engine-swap spec (`docs/ARCHITECTURE.md`)
-- **Release & Repo Governance:** `CHANGELOG.md`, GitHub Actions CI (`.github/workflows/ci.yml`), issue/PR templates, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` (Apache-2.0)
+Package ID: `com.simpleaibrowser.sab` · Minimum SDK: Android 10 (`API 29`) · Architecture: `arm64-v8a`
 
 ---
 
-## Required Keys & Environment Setup
+## Key Features (v1.1.0 — Core Browser Foundation)
 
-You do **not** put secrets directly in source code. All sensitive keys live in environment variables (see [`.env.example`](./.env.example)):
-
-| Key | Purpose | Where to Get It |
-| --- | --- | --- |
-| `GEMINI_API_KEY` | Authenticates server-side Gemini API requests | [Google AI Studio API Keys](https://aistudio.google.com/apikey) |
-| `APP_URL` | Public URL of your deployed or local app | Auto-set in AI Studio, or `http://localhost:3000` locally |
-
-For full step-by-step instructions (including screenshots-free walkthroughs for beginners), read **[docs/SETUP.md](./docs/SETUP.md)**.
+- **Mozilla GeckoView 161+ Engine (`non-omni`, `arm64-v8a`)**: Full Gecko rendering with Enhanced Tracking Protection (ETP), Safe Browsing, anti-fingerprinting, and built-in `sab-bridge` WebExtension.
+- **Engine-Agnostic Architecture**: Strict separation between the Compose UI shell (`ui/`), browser contracts (`core/browser/`), and the GeckoView adapter (`engine/gecko/`) — inspired by Opera Mobile's modular design.
+- **Opera-Inspired Thumb-Zone Ergonomics**: 5-slot bottom navigation bar (`Back`, `Home`, glowing `Fast Action Search Orb`, `Tab Counter Badge`, `Control Menu`) designed for effortless one-handed use.
+- **Speed Dial Start Page**: Atmospheric OLED start page with live Privacy Shield metrics and a customizable 4-column Speed Dial grid persisted locally in Room.
+- **Redesigned Tab Gallery & Tab Islands**:
+  - Automatic contextual grouping when links open in new tabs
+  - Manual Tab Island creation, color-coding, collapsing, and bulk closing
+  - Regular / Islands / Private switcher, Grid & List view toggle, tab search, and Recently Closed Tabs undo stack
+- **Built-in Privacy Shield**: Blocks ads, analytics, social trackers, cryptominers, and fingerprinters with HTTPS-Only automatic upgrades and Private Mode.
+- **Power-User Page Controls**: Desktop Site toggle, Force Dark Web Pages, Reader Focus Mode, Find in Page, Bookmarks, History, Native Share, and 4 curated Material 3 Theme Presets.
+- **Signature Launch Reveal**: Custom adaptive SAB prism logo paired with an animated orbital intro sequence.
 
 ---
 
-## Quick Start (Local Development)
+## Architecture Overview
+
+```text
++----------------------------------------------------------------------+
+|  PRESENTATION SHELL (Jetpack Compose + Material 3)                   |
+|  Splash Reveal · Speed Dial · Omnibox · 5-Slot Bar · Tab Islands     |
++----------------------------------+-----------------------------------+
+                                   | StateFlow / Commands
+                                   v
++----------------------------------------------------------------------+
+|  ENGINE-AGNOSTIC BROWSER CORE (core/browser)                         |
+|  BrowserEngine · BrowserTabSession · UrlResolver · TabIsland Models  |
+|  (Zero imports from org.mozilla.geckoview or android.webkit)         |
++----------------------------------+-----------------------------------+
+                                   | Implemented by
+                                   v
++----------------------------------------------------------------------+
+|  ENGINE LAYER (engine/gecko)                                         |
+|  org.mozilla.geckoview:geckoview-arm64-v8a:161.0 (non-omni, API 29+) |
+|  GeckoRuntime · ETP ContentBlocking · sab-bridge WebExtension        |
++----------------------------------------------------------------------+
+|  LOCAL DATA LAYER (data/)                                            |
+|  Room Database (Speed Dial, Bookmarks, History) + DataStore Prefs    |
++----------------------------------------------------------------------+
+```
+
+Read the full deep-dive documentation:
+- [System Architecture & Opera Parity Analysis](docs/ARCHITECTURE.md)
+- [GeckoView 159+/161 Engine & WebExtension Guide](docs/GECKOVIEW_ENGINE.md)
+- [Local Development, Build & Security Setup](docs/SETUP.md)
+
+---
+
+## Quick Start
 
 ### Prerequisites
+- Android Studio Ladybug+ or JDK 17+ / Gradle 8.13+
+- Android SDK Platform 36 (`minSdk 29` — Android 10+)
+- ARM64 (`arm64-v8a`) physical device or emulator for native GeckoView execution
 
-- **Node.js** `18+` (recommended `20+`)
-- **npm** (comes with Node.js) or **bun**
-
-### 1. Clone the repository
-
+### Build & Run
 ```bash
 git clone https://github.com/Raj-Dev-Lab/Simple-Ai-Browser.git
 cd Simple-Ai-Browser
+./gradlew :app:assembleDebug
 ```
 
-### 2. Install dependencies
-
+Run unit & Robolectric tests:
 ```bash
-npm install
-```
-
-### 3. Configure environment variables
-
-```bash
-cp .env.example .env
-```
-
-Open `.env` and replace `"MY_GEMINI_API_KEY"` with your real key from [Google AI Studio](https://aistudio.google.com/apikey), and set `APP_URL="http://localhost:3000"`.
-
-> **Never commit `.env` to GitHub.** It is already listed in `.gitignore`.
-
-### 4. Start the development server
-
-```bash
-npm run dev
-```
-
-Open `http://localhost:3000` in your browser.
-
----
-
-## Available Scripts
-
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Start the Vite development server on port `3000` |
-| `npm run build` | Build the production bundle into `dist/` |
-| `npm run preview` | Preview the production build locally |
-| `npm run lint` | Run TypeScript type-checking (`tsc --noEmit`) |
-| `npm run clean` | Remove build output (`dist/`) |
-
----
-
-## Project Structure
-
-```text
-Simple-Ai-Browser/
-├── android/
-│   ├── app/build.gradle.kts              # Android 10+ (minSdk 29) & arm64-v8a config
-│   ├── core-browser/                     # Engine-agnostic BrowserEngine & TabSession contracts
-│   ├── engine-gecko/                     # GeckoView 159+ non-omni adapter & sab-bridge
-│   ├── gradle/libs.versions.toml         # Pinned GeckoView 159+ Maven coordinates
-│   └── settings.gradle.kts               # Mozilla Maven repository setup
-├── docs/
-│   ├── ARCHITECTURE.md                   # 5-layer Opera -> SAB engine-swap blueprint
-│   ├── GECKOVIEW_ENGINE.md               # GeckoView 159+ non-omni arm64-v8a guide
-│   ├── OPERA_UI_ANALYSIS.md              # Opera Mobile UI & thumb-zone teardown
-│   └── SETUP.md                          # Beginner-friendly API key & setup guide
-├── src/
-│   ├── assets/images/                    # Generated SAB app logo asset
-│   ├── components/                       # SplashOverlay, SabLogo, Prototype, Explorer
-│   ├── data/                             # Architecture & Speed Dial blueprint data
-│   ├── App.tsx                           # Root application component
-│   ├── index.css                         # Tailwind CSS entry point
-│   └── main.tsx                          # React DOM mount
-├── .env.example                          # Environment variable template (safe to commit)
-├── .gitignore                            # Excludes .env, node_modules, dist, logs
-├── CONTRIBUTING.md       # Contribution guidelines
-├── index.html            # HTML entry & OpenGraph metadata
-├── LICENSE               # Apache License 2.0
-├── metadata.json         # App manifest metadata
-├── package.json          # Dependencies and npm scripts
-├── README.md             # Project overview
-├── SECURITY.md           # Security & key management policy
-├── tsconfig.json         # TypeScript configuration
-└── vite.config.ts        # Vite bundler configuration
+./gradlew :app:testDebugUnitTest
 ```
 
 ---
 
-## Contributing
+## Roadmap Highlights
 
-Contributions are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request.
+- **Phase 1 (`v1.1.0` — Current):** Production GeckoView 161+ browser core, Opera-inspired UI shell, Speed Dial, Tab Islands, Privacy Shield, Bookmarks & History.
+- **Phase 2 (`v1.2.0`):** Native Download Manager, GeckoView `PromptDelegate` & runtime site permissions, fullscreen video & Picture-in-Picture, long-press link context menus.
+- **Phase 3 (`v2.0.0`):** Modular AI Assistant layer (page summarization, selection Q&A, translation, Tab Island comparison) powered via `sab-bridge` DOM snapshots.
 
-## Security
+---
 
-If you accidentally paste or commit an API key or GitHub token, revoke it immediately and see [SECURITY.md](./SECURITY.md).
+## Contributing & Security
+
+- Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+- Security issues and vulnerability disclosures are handled via [SECURITY.md](SECURITY.md).
+- Track all releases in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-Licensed under the **Apache License 2.0**. See [LICENSE](./LICENSE) for details.
+Simple AI Browser (SAB) source code is licensed under the **MIT License** — see [LICENSE](LICENSE).  
+Pre-compiled Mozilla GeckoView binaries are governed by the **Mozilla Public License 2.0 (MPL-2.0)**.
