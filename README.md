@@ -8,10 +8,10 @@ A clean, fast AI-powered web browsing and research workspace built with React, T
 
 This repository includes:
 
-- **Architecture & Research Blueprint:** Deep teardown of Opera Mobile UI (`docs/OPERA_UI_ANALYSIS.md`), GeckoView 159+ non-omni `arm64-v8a` Android 10+ setup (`docs/GECKOVIEW_ENGINE.md`), and the decoupled engine-swap spec (`docs/ARCHITECTURE.md`)
-- **Android Engine-Swap Starter (`android/`):** Gradle catalog (`geckoview-arm64-v8a:159+`), `BrowserEngine` contracts, `GeckoEngineAdapter`, and `sab-bridge` WebExtension
-- **Interactive Web Showcase & UI Prototype (`src/`):** Live SAB logo, splash animation, Opera-style mobile UI prototype, and interactive architecture explorer
-- **Documentation & Governance:** `README.md`, `docs/SETUP.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` (Apache-2.0)
+- **Live Full-Stack Web Browser (`server.ts` + `src/`):** SSRF-hardened live webpage fetcher, DuckDuckGo live web search, Gemini `gemini-4-hydrogen` contextual AI sheet, Opera-style 5-slot bottom bar, customizable Speed Dial, Tab Islands, Private Tabs, Bookmarks & History, Reader Mode, and Find in Page
+- **Android GeckoView 159+ App (`android/`):** Multi-module Kotlin/Jetpack Compose project (`:app`, `:core-browser`, `:engine-gecko`) using `org.mozilla.geckoview:geckoview-arm64-v8a:159+` (non-omni), `minSdk = 29` (Android 10+), `arm64-v8a`, and `sab-bridge` WebExtension
+- **Architecture & Engineering Docs (`docs/`):** Opera Mobile UI teardown (`docs/OPERA_UI_ANALYSIS.md`), GeckoView 159+ integration guide (`docs/GECKOVIEW_ENGINE.md`), and decoupled engine-swap spec (`docs/ARCHITECTURE.md`)
+- **Release & Repo Governance:** `CHANGELOG.md`, GitHub Actions CI (`.github/workflows/ci.yml`), issue/PR templates, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` (Apache-2.0)
 
 ---
 
