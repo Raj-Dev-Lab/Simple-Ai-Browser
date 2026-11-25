@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -25,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -58,9 +58,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.simpleaibrowser.sab.core.browser.EngineInfo
-import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.data.BrowserSettings
 import com.simpleaibrowser.sab.data.SpeedDialEntity
+import com.simpleaibrowser.sab.ui.components.SiteFavicon
 import com.simpleaibrowser.sab.ui.theme.JetBrainsMonoFamily
 import com.simpleaibrowser.sab.ui.theme.LocalSabColors
 import com.simpleaibrowser.sab.ui.theme.SpaceGroteskFamily
@@ -80,6 +80,7 @@ fun SpeedDialStartPage(
     onNewPrivateTab: () -> Unit,
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenDownloads: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -357,7 +358,7 @@ fun SpeedDialStartPage(
             item(key = "quick_actions") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     StartQuickActionChip(
                         icon = Icons.Filled.VisibilityOff,
@@ -368,7 +369,7 @@ fun SpeedDialStartPage(
                     )
                     StartQuickActionChip(
                         icon = Icons.Filled.Bookmark,
-                        label = "Bookmarks",
+                        label = "Saved",
                         accent = MaterialTheme.colorScheme.primary,
                         onClick = onOpenBookmarks,
                         modifier = Modifier.weight(1f).testTag("quick_bookmarks_btn")
@@ -381,8 +382,15 @@ fun SpeedDialStartPage(
                         modifier = Modifier.weight(1f).testTag("quick_history_btn")
                     )
                     StartQuickActionChip(
+                        icon = Icons.Filled.Download,
+                        label = "Files",
+                        accent = sabColors.shieldGreen,
+                        onClick = onOpenDownloads,
+                        modifier = Modifier.weight(1f).testTag("quick_downloads_btn")
+                    )
+                    StartQuickActionChip(
                         icon = Icons.Filled.Settings,
-                        label = "Settings",
+                        label = "Config",
                         accent = sabColors.subtleText,
                         onClick = onOpenSettings,
                         modifier = Modifier.weight(1f).testTag("quick_settings_btn")
@@ -499,12 +507,15 @@ private fun SpeedDialTile(
                 .border(1.dp, accentColor.copy(alpha = 0.42f), RoundedCornerShape(18.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = UrlResolver.extractMonogram(item.title),
-                fontFamily = SpaceGroteskFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 22.sp,
-                color = accentColor
+            SiteFavicon(
+                url = item.url,
+                title = item.title,
+                accentColor = accentColor,
+                size = 56.dp,
+                iconSize = 30.dp,
+                cornerRadius = 17.dp,
+                monogramSize = 22.sp,
+                containerColor = Color.Transparent
             )
         }
         Spacer(modifier = Modifier.height(6.dp))

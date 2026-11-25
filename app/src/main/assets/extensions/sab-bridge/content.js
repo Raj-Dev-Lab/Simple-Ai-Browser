@@ -1,6 +1,7 @@
 (() => {
   const DARK_STYLE_ID = "sab-force-dark-css";
   const READER_STYLE_ID = "sab-reader-mode-css";
+  const ZOOM_STYLE_ID = "sab-text-zoom-css";
 
   function setForceDark(enabled) {
     let style = document.getElementById(DARK_STYLE_ID);
@@ -50,6 +51,21 @@
     }
   }
 
+  function setTextZoom(percent) {
+    let style = document.getElementById(ZOOM_STYLE_ID);
+    const clamped = Math.max(75, Math.min(160, Number(percent) || 100));
+    if (clamped === 100) {
+      if (style) style.remove();
+      return;
+    }
+    if (!style) {
+      style = document.createElement("style");
+      style.id = ZOOM_STYLE_ID;
+      (document.head || document.documentElement).appendChild(style);
+    }
+    style.textContent = `html { font-size: ${clamped}% !important; -webkit-text-size-adjust: ${clamped}% !important; }`;
+  }
+
   function extractSnapshot(maxChars) {
     const selection = window.getSelection ? window.getSelection().toString().trim() : "";
     const text = (document.body ? document.body.innerText : "")
@@ -73,6 +89,8 @@
           setForceDark(Boolean(msg.enabled));
         } else if (msg.type === "SET_READER_MODE") {
           setReaderMode(Boolean(msg.enabled));
+        } else if (msg.type === "SET_TEXT_ZOOM") {
+          setTextZoom(msg.percent);
         } else if (msg.type === "EXTRACT_SNAPSHOT") {
           port.postMessage({
             type: "SNAPSHOT_RESULT",

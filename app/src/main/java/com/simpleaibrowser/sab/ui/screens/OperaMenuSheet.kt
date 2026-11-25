@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,14 +23,20 @@ import androidx.compose.material.icons.automirrored.filled.ChromeReaderMode
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FindInPage
+import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shield
@@ -40,6 +45,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -61,11 +67,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.SecurityState
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.UrlResolver
+import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.data.BrowserSettings
+import com.simpleaibrowser.sab.ui.theme.JetBrainsMonoFamily
 import com.simpleaibrowser.sab.ui.theme.LocalSabColors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -84,11 +94,14 @@ fun OperaMenuBottomSheet(
     onNewPrivateTab: () -> Unit,
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenDownloads: () -> Unit,
     onPinToSpeedDial: () -> Unit,
     onToggleAdBlock: (Boolean) -> Unit,
     onToggleDesktop: () -> Unit,
     onToggleForceDark: () -> Unit,
     onToggleReader: () -> Unit,
+    onAdjustTextZoom: (Int) -> Unit,
+    onResetTextZoom: () -> Unit,
     onOpenSettings: () -> Unit,
     onReplaySplash: () -> Unit
 ) {
@@ -193,6 +206,70 @@ fun OperaMenuBottomSheet(
                     checked = activeTab.readerMode,
                     onCheckedChange = { onToggleReader(); onDismiss() }
                 )
+
+                // Live Page Text Zoom Controls
+                if (!activeTab.isStartPage) {
+                    HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.FormatSize,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Page Text Zoom", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                text = "Scale article readability live",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = sabColors.subtleText
+                            )
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            IconButton(
+                                onClick = { onAdjustTextZoom(-10) },
+                                enabled = activeTab.textZoomPercent > 75,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(sabColors.chromeBar)
+                            ) {
+                                Icon(Icons.Filled.Remove, contentDescription = "Decrease text size", modifier = Modifier.size(16.dp))
+                            }
+                            Text(
+                                text = "${activeTab.textZoomPercent}%",
+                                fontFamily = JetBrainsMonoFamily,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (activeTab.textZoomPercent != 100) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable(onClick = onResetTextZoom)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                            IconButton(
+                                onClick = { onAdjustTextZoom(10) },
+                                enabled = activeTab.textZoomPercent < 160,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(sabColors.chromeBar)
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = "Increase text size", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
             }
 
             // Navigation Actions Card
@@ -219,6 +296,13 @@ fun OperaMenuBottomSheet(
                 MenuActionRow(icon = Icons.Filled.Bookmark, title = "Bookmarks", onClick = onOpenBookmarks)
                 MenuActionRow(icon = Icons.Filled.History, title = "History", onClick = onOpenHistory)
                 MenuActionRow(
+                    icon = Icons.Filled.Download,
+                    title = "Downloads",
+                    tint = sabColors.shieldGreen,
+                    onClick = onOpenDownloads,
+                    testTag = "menu_downloads_row"
+                )
+                MenuActionRow(
                     icon = Icons.Filled.Settings,
                     title = "Browser Settings & Engine Info",
                     onClick = onOpenSettings,
@@ -232,6 +316,241 @@ fun OperaMenuBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LinkContextBottomSheet(
+    target: ContextMenuTarget,
+    onOpenInNewTab: (String) -> Unit,
+    onOpenInIsland: (String) -> Unit,
+    onOpenInPrivateTab: (String) -> Unit,
+    onCopyUrl: (String) -> Unit,
+    onDownloadUrl: (String) -> Unit,
+    onShareUrl: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sabColors = LocalSabColors.current
+    val primaryUrl = target.linkUrl ?: target.mediaUrl ?: return
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = sabColors.chromeBar
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(sabColors.chromeSurfaceElevated)
+                    .padding(14.dp)
+            ) {
+                if (!target.title.isNullOrBlank()) {
+                    Text(
+                        text = target.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    text = primaryUrl,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = sabColors.subtleText,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(sabColors.chromeSurfaceElevated)
+            ) {
+                MenuActionRow(
+                    icon = Icons.Filled.OpenInNew,
+                    title = "Open in New Tab",
+                    onClick = { onOpenInNewTab(primaryUrl) }
+                )
+                MenuActionRow(
+                    icon = Icons.Filled.Layers,
+                    title = "Open in Tab Island",
+                    tint = MaterialTheme.colorScheme.secondary,
+                    onClick = { onOpenInIsland(primaryUrl) }
+                )
+                MenuActionRow(
+                    icon = Icons.Filled.VisibilityOff,
+                    title = "Open in Private Tab",
+                    tint = sabColors.privateAccent,
+                    onClick = { onOpenInPrivateTab(primaryUrl) }
+                )
+                HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                MenuActionRow(
+                    icon = Icons.Filled.ContentCopy,
+                    title = "Copy Link Address",
+                    onClick = { onCopyUrl(primaryUrl); onDismiss() }
+                )
+                val downloadTarget = target.mediaUrl ?: primaryUrl
+                MenuActionRow(
+                    icon = Icons.Filled.Download,
+                    title = if (target.mediaUrl != null) "Download Image / Media" else "Download Link",
+                    tint = sabColors.shieldGreen,
+                    onClick = { onDownloadUrl(downloadTarget) }
+                )
+                MenuActionRow(
+                    icon = Icons.Filled.Share,
+                    title = "Share Link",
+                    onClick = { onShareUrl(primaryUrl); onDismiss() }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+fun WebPromptDialog(
+    prompt: WebPromptRequest,
+    onDismissComplete: () -> Unit
+) {
+    when (prompt) {
+        is WebPromptRequest.Alert -> {
+            AlertDialog(
+                onDismissRequest = {
+                    prompt.onDismiss()
+                    onDismissComplete()
+                },
+                title = { Text(prompt.title.ifBlank { prompt.originHost }) },
+                text = { Text(prompt.message) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            prompt.onDismiss()
+                            onDismissComplete()
+                        }
+                    ) {
+                        Text("OK")
+                    }
+                }
+            )
+        }
+
+        is WebPromptRequest.Confirm -> {
+            AlertDialog(
+                onDismissRequest = {
+                    prompt.onResult(false)
+                    onDismissComplete()
+                },
+                title = { Text(prompt.title.ifBlank { prompt.originHost }) },
+                text = { Text(prompt.message) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            prompt.onResult(true)
+                            onDismissComplete()
+                        }
+                    ) {
+                        Text("Confirm")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            prompt.onResult(false)
+                            onDismissComplete()
+                        }
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        is WebPromptRequest.TextInput -> {
+            var inputText by remember(prompt.id) { mutableStateOf(prompt.defaultValue) }
+            AlertDialog(
+                onDismissRequest = {
+                    prompt.onResult(null)
+                    onDismissComplete()
+                },
+                title = { Text(prompt.title.ifBlank { prompt.originHost }) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (prompt.message.isNotBlank()) {
+                            Text(prompt.message)
+                        }
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            prompt.onResult(inputText)
+                            onDismissComplete()
+                        }
+                    ) {
+                        Text("OK")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            prompt.onResult(null)
+                            onDismissComplete()
+                        }
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        is WebPromptRequest.SitePermission -> {
+            AlertDialog(
+                onDismissRequest = {
+                    prompt.onResult(false)
+                    onDismissComplete()
+                },
+                title = { Text("Site Permission") },
+                text = { Text("${prompt.originHost} wants to ${prompt.permissionLabel}.") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            prompt.onResult(true)
+                            onDismissComplete()
+                        }
+                    ) {
+                        Text("Allow")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            prompt.onResult(false)
+                            onDismissComplete()
+                        }
+                    ) {
+                        Text("Block")
+                    }
+                }
+            )
         }
     }
 }

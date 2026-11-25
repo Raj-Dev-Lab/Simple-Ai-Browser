@@ -5,10 +5,10 @@
 SAB links directly against Mozilla's official pre-compiled ARM64 non-omni artifact from Mozilla Maven:
 
 - **Repository:** `https://maven.mozilla.org/maven2/`
-- **Coordinate:** `org.mozilla.geckoview:geckoview-arm64-v8a:161.0.20261118180411`
+- **Coordinate:** `org.mozilla.geckoview:geckoview:161.0.20261118180411`
 - **Minimum SDK:** Android 10 (`minSdk = 29`)
-- **ABI Target:** `arm64-v8a` (64-bit ARMv8)
-- **Variant:** Standard (`non-omni`) — smaller footprint and clean production distribution compared to `-omni` debug/multi-ABI bundles.
+- **ABI Targets (`ndk.abiFilters`):** `arm64-v8a` (64-bit ARMv8 devices) and `x86_64` (Android emulators)
+- **Variant:** Standard (`non-omni`) — 32-bit `armeabi-v7a` and `x86` libraries are stripped via `abiFilters`.
 
 ## Runtime Configuration (`GeckoEngineAdapter.kt`)
 

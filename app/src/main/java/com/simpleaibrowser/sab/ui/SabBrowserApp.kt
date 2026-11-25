@@ -1,5 +1,6 @@
 package com.simpleaibrowser.sab.ui
 
+import android.app.Activity
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -19,13 +20,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.ui.components.EngineViewport
 import com.simpleaibrowser.sab.ui.components.FindInPageBar
 import com.simpleaibrowser.sab.ui.components.OperaBottomBar
@@ -34,11 +41,13 @@ import com.simpleaibrowser.sab.ui.components.SabSplashOverlay
 import com.simpleaibrowser.sab.ui.components.SabTopAddressBar
 import com.simpleaibrowser.sab.ui.screens.AddSpeedDialDialog
 import com.simpleaibrowser.sab.ui.screens.LibraryScreen
+import com.simpleaibrowser.sab.ui.screens.LinkContextBottomSheet
 import com.simpleaibrowser.sab.ui.screens.OperaMenuBottomSheet
 import com.simpleaibrowser.sab.ui.screens.PrivacyShieldSheet
 import com.simpleaibrowser.sab.ui.screens.SettingsScreen
 import com.simpleaibrowser.sab.ui.screens.SpeedDialStartPage
 import com.simpleaibrowser.sab.ui.screens.TabGalleryScreen
+import com.simpleaibrowser.sab.ui.screens.WebPromptDialog
 import com.simpleaibrowser.sab.ui.theme.LocalSabColors
 import com.simpleaibrowser.sab.ui.theme.SabBrowserTheme
 import com.simpleaibrowser.sab.ui.viewmodel.BrowserOverlay
@@ -52,6 +61,7 @@ fun SabBrowserApp(
     initialExternalUrl: String? = null
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val tabs by viewModel.tabs.collectAsStateWithLifecycle()
     val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
@@ -62,6 +72,7 @@ fun SabBrowserApp(
     val speedDials by viewModel.speedDials.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
+    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val isBookmarked by viewModel.isActivePageBookmarked.collectAsStateWithLifecycle()
     val overlay by viewModel.overlay.collectAsStateWithLifecycle()
     val showSplash by viewModel.showSplash.collectAsStateWithLifecycle()
@@ -70,6 +81,10 @@ fun SabBrowserApp(
     val suggestions by viewModel.omniboxSuggestions.collectAsStateWithLifecycle()
     val isFindVisible by viewModel.isFindInPageVisible.collectAsStateWithLifecycle()
     val findQuery by viewModel.findQuery.collectAsStateWithLifecycle()
+    val findResult by viewModel.findResult.collectAsStateWithLifecycle()
+    val isFullScreen by viewModel.isFullScreen.collectAsStateWithLifecycle()
+    val contextMenuTarget by viewModel.contextMenuTarget.collectAsStateWithLifecycle()
+    val activePrompt by viewModel.activePrompt.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
 
     LaunchedEffect(initialExternalUrl) {
@@ -85,7 +100,27 @@ fun SabBrowserApp(
         }
     }
 
-    val shouldInterceptBack = isOmniboxEditing ||
+    // Immersive Fullscreen Video / Web Fullscreen system bar control
+    DisposableEffect(isFullScreen) {
+        val window = (context as? Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (controller != null) {
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (isFullScreen) {
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        onDispose {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    val shouldInterceptBack = isFullScreen ||
+        contextMenuTarget != null ||
+        isOmniboxEditing ||
         isFindVisible ||
         overlay != BrowserOverlay.None ||
         activeTab.canGoBack ||
@@ -94,6 +129,8 @@ fun SabBrowserApp(
     BackHandler(enabled = shouldInterceptBack) {
         viewModel.goBack()
     }
+
+    val isBottomAddressBar = settings.addressBarPosition == AddressBarPosition.BOTTOM
 
     SabBrowserTheme(preset = settings.themePreset) {
         val sabColors = LocalSabColors.current
@@ -104,30 +141,39 @@ fun SabBrowserApp(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Status-bar safe top chrome
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (activeTab.isPrivate) sabColors.privateSurface else sabColors.chromeBar)
-                        .statusBarsPadding()
-                ) {
-                    if (!activeTab.isStartPage) {
-                        SabTopAddressBar(
-                            tab = activeTab,
-                            adBlockEnabled = settings.adBlockEnabled,
-                            onAddressClick = { viewModel.beginOmniboxEdit() },
-                            onShieldClick = { viewModel.openOverlay(BrowserOverlay.ShieldSheet) },
-                            onReloadOrStop = { viewModel.reloadOrStop() }
+                // Top Chrome (hidden in fullscreen video mode)
+                if (!isFullScreen) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(if (activeTab.isPrivate) sabColors.privateSurface else sabColors.chromeBar)
+                            .statusBarsPadding()
+                    ) {
+                        if (!activeTab.isStartPage && !isBottomAddressBar) {
+                            SabTopAddressBar(
+                                tab = activeTab,
+                                adBlockEnabled = settings.adBlockEnabled,
+                                onAddressClick = { viewModel.beginOmniboxEdit() },
+                                onShieldClick = { viewModel.openOverlay(BrowserOverlay.ShieldSheet) },
+                                onReloadOrStop = { viewModel.reloadOrStop() },
+                                onSwipeTab = { step -> viewModel.switchToAdjacentTab(step) },
+                                showTopDivider = false
+                            )
+                        }
+                    }
+
+                    if (!isBottomAddressBar) {
+                        FindInPageBar(
+                            visible = isFindVisible && !activeTab.isStartPage,
+                            query = findQuery,
+                            findResult = findResult,
+                            onQueryChange = { viewModel.updateFindQuery(it) },
+                            onFindPrevious = { viewModel.findPreviousMatch() },
+                            onFindNext = { viewModel.findNextMatch() },
+                            onClose = { viewModel.closeFindInPage() }
                         )
                     }
                 }
-
-                FindInPageBar(
-                    visible = isFindVisible && !activeTab.isStartPage,
-                    query = findQuery,
-                    onQueryChange = { viewModel.updateFindQuery(it) },
-                    onClose = { viewModel.closeFindInPage() }
-                )
 
                 // Main Content Viewport: Speed Dial Start Page OR Live GeckoView Engine Viewport
                 Box(
@@ -136,15 +182,12 @@ fun SabBrowserApp(
                         .fillMaxWidth()
                 ) {
                     val session = activeSession
-                    if (session != null) {
-                        // Keep the native GeckoView attached when browsing web pages
-                        if (!activeTab.isStartPage) {
-                            EngineViewport(
-                                engine = viewModel.engine,
-                                session = session,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
+                    if (session != null && !activeTab.isStartPage) {
+                        EngineViewport(
+                            engine = viewModel.engine,
+                            session = session,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
 
                     if (activeTab.isStartPage) {
@@ -161,22 +204,50 @@ fun SabBrowserApp(
                             onNewPrivateTab = { viewModel.createNewTab(isPrivate = true, select = true) },
                             onOpenBookmarks = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.BOOKMARKS)) },
                             onOpenHistory = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.HISTORY)) },
+                            onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.DOWNLOADS)) },
                             onOpenSettings = { viewModel.openOverlay(BrowserOverlay.Settings) }
                         )
                     }
                 }
 
-                // Opera Mobile 5-Slot Bottom Navigation Bar
-                OperaBottomBar(
-                    activeTab = activeTab,
-                    totalTabCount = tabs.count { !it.isPrivate },
-                    onBack = { viewModel.goBack() },
-                    onHome = { viewModel.navigateHome() },
-                    onFastActionClick = { viewModel.beginOmniboxEdit() },
-                    onFastActionLongPress = { viewModel.createNewTab(isPrivate = activeTab.isPrivate, select = true) },
-                    onOpenTabGallery = { viewModel.openOverlay(BrowserOverlay.TabGallery) },
-                    onOpenMenu = { viewModel.openOverlay(BrowserOverlay.OperaMenu) }
-                )
+                // Bottom Chrome (hidden in fullscreen video mode)
+                if (!isFullScreen) {
+                    if (isBottomAddressBar) {
+                        FindInPageBar(
+                            visible = isFindVisible && !activeTab.isStartPage,
+                            query = findQuery,
+                            findResult = findResult,
+                            onQueryChange = { viewModel.updateFindQuery(it) },
+                            onFindPrevious = { viewModel.findPreviousMatch() },
+                            onFindNext = { viewModel.findNextMatch() },
+                            onClose = { viewModel.closeFindInPage() }
+                        )
+
+                        if (!activeTab.isStartPage) {
+                            SabTopAddressBar(
+                                tab = activeTab,
+                                adBlockEnabled = settings.adBlockEnabled,
+                                onAddressClick = { viewModel.beginOmniboxEdit() },
+                                onShieldClick = { viewModel.openOverlay(BrowserOverlay.ShieldSheet) },
+                                onReloadOrStop = { viewModel.reloadOrStop() },
+                                onSwipeTab = { step -> viewModel.switchToAdjacentTab(step) },
+                                showTopDivider = true
+                            )
+                        }
+                    }
+
+                    // Opera Mobile 5-Slot Bottom Navigation Bar
+                    OperaBottomBar(
+                        activeTab = activeTab,
+                        totalTabCount = tabs.count { !it.isPrivate },
+                        onBack = { viewModel.goBack() },
+                        onHome = { viewModel.navigateHome() },
+                        onFastActionClick = { viewModel.beginOmniboxEdit() },
+                        onFastActionLongPress = { viewModel.createNewTab(isPrivate = activeTab.isPrivate, select = true) },
+                        onOpenTabGallery = { viewModel.openOverlay(BrowserOverlay.TabGallery) },
+                        onOpenMenu = { viewModel.openOverlay(BrowserOverlay.OperaMenu) }
+                    )
+                }
             }
 
             // Full-width Omnibox Editor & Live Suggestions Overlay
@@ -193,10 +264,13 @@ fun SabBrowserApp(
                 ) {
                     SabOmniboxEditorOverlay(
                         query = omniboxQuery,
+                        activePageUrl = activeTab.url.takeIf { !activeTab.isStartPage },
                         searchEngine = settings.searchEngine,
                         isPrivate = activeTab.isPrivate,
                         suggestions = suggestions,
                         onQueryChange = { viewModel.updateOmniboxQuery(it) },
+                        onSelectSearchEngine = { viewModel.setSearchEngine(it) },
+                        onCopyUrl = { url -> viewModel.copyTextToClipboard("URL", url) },
                         onSubmit = { viewModel.submitOmnibox(it) },
                         onDismiss = { viewModel.cancelOmniboxEdit() }
                     )
@@ -219,6 +293,8 @@ fun SabBrowserApp(
                         onCloseAll = { privateFlag -> viewModel.closeAllTabs(privateOnly = privateFlag) },
                         onReopenClosed = { viewModel.reopenLastClosedTab() },
                         onCreateIsland = { name -> viewModel.createTabIsland(name) },
+                        onRenameIsland = { id, newName -> viewModel.renameIsland(id, newName) },
+                        onAssignTabToIsland = { tabId, islandId -> viewModel.assignTabToIsland(tabId, islandId) },
                         onToggleIslandCollapsed = { viewModel.toggleIslandCollapsed(it) },
                         onAddTabToIsland = { islandId ->
                             viewModel.createNewTab(isPrivate = false, islandId = islandId, select = true)
@@ -239,12 +315,7 @@ fun SabBrowserApp(
                         onReload = { viewModel.reloadOrStop() },
                         onShare = {
                             if (!activeTab.isStartPage) {
-                                val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                                    putExtra(Intent.EXTRA_TEXT, activeTab.url)
-                                    putExtra(Intent.EXTRA_SUBJECT, activeTab.title)
-                                    type = "text/plain"
-                                }
-                                context.startActivity(Intent.createChooser(sendIntent, "Share page"))
+                                shareText(context, activeTab.title, activeTab.url)
                             }
                         },
                         onFindInPage = { viewModel.openFindInPage() },
@@ -252,11 +323,14 @@ fun SabBrowserApp(
                         onNewPrivateTab = { viewModel.createNewTab(isPrivate = true, select = true) },
                         onOpenBookmarks = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.BOOKMARKS)) },
                         onOpenHistory = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.HISTORY)) },
+                        onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.DOWNLOADS)) },
                         onPinToSpeedDial = { viewModel.addCurrentPageToSpeedDial() },
                         onToggleAdBlock = { viewModel.setAdBlockEnabled(it) },
                         onToggleDesktop = { viewModel.toggleDesktopMode() },
                         onToggleForceDark = { viewModel.toggleForceDarkMode() },
                         onToggleReader = { viewModel.toggleReaderMode() },
+                        onAdjustTextZoom = { delta -> viewModel.adjustActiveTabTextZoom(delta) },
+                        onResetTextZoom = { viewModel.resetActiveTabTextZoom() },
                         onOpenSettings = { viewModel.openOverlay(BrowserOverlay.Settings) },
                         onReplaySplash = { viewModel.replaySplash() }
                     )
@@ -278,10 +352,14 @@ fun SabBrowserApp(
                         initialTab = currentOverlay.initialTab,
                         bookmarks = bookmarks,
                         history = history,
+                        downloads = downloads,
                         onOpenUrl = { viewModel.navigateToUrl(it) },
+                        onOpenDownload = { item -> viewModel.openDownloadedFile(context, item) },
                         onDeleteBookmark = { viewModel.deleteBookmark(it) },
                         onDeleteHistory = { viewModel.deleteHistoryItem(it) },
+                        onDeleteDownload = { viewModel.deleteDownloadRecord(it) },
                         onClearHistory = { viewModel.clearAllBrowsingData() },
+                        onClearDownloads = { viewModel.clearDownloads() },
                         onDismiss = { viewModel.closeOverlay() }
                     )
                 }
@@ -292,6 +370,9 @@ fun SabBrowserApp(
                         engineInfo = viewModel.engineInfo,
                         onSelectSearchEngine = { viewModel.setSearchEngine(it) },
                         onSelectThemePreset = { viewModel.setThemePreset(it) },
+                        onSelectAddressBarPosition = { viewModel.setAddressBarPosition(it) },
+                        onToggleRestoreTabs = { viewModel.setRestoreTabsOnStart(it) },
+                        onSelectDefaultTextZoom = { viewModel.setDefaultTextZoom(it) },
                         onToggleAdBlock = { viewModel.setAdBlockEnabled(it) },
                         onToggleHttpsOnly = { viewModel.setHttpsOnlyEnabled(it) },
                         onToggleForceDarkDefault = { viewModel.setForceDarkDefault(it) },
@@ -309,6 +390,28 @@ fun SabBrowserApp(
                 }
             }
 
+            // Long-Press Link / Image Context Sheet
+            contextMenuTarget?.let { target ->
+                LinkContextBottomSheet(
+                    target = target,
+                    onOpenInNewTab = { url -> viewModel.openLinkInNewTab(url, inIsland = false, isPrivate = false) },
+                    onOpenInIsland = { url -> viewModel.openLinkInNewTab(url, inIsland = true, isPrivate = false) },
+                    onOpenInPrivateTab = { url -> viewModel.openLinkInNewTab(url, inIsland = false, isPrivate = true) },
+                    onCopyUrl = { url -> viewModel.copyTextToClipboard("link", url) },
+                    onDownloadUrl = { url -> viewModel.downloadUrl(url) },
+                    onShareUrl = { url -> shareText(context, target.title ?: url, url) },
+                    onDismiss = { viewModel.dismissContextMenu() }
+                )
+            }
+
+            // Native JS Alert / Confirm / Prompt & Site Permission Dialog
+            activePrompt?.let { prompt ->
+                WebPromptDialog(
+                    prompt = prompt,
+                    onDismissComplete = { viewModel.dismissPrompt() }
+                )
+            }
+
             // Floating Feedback Pill Toast
             AnimatedVisibility(
                 visible = toastMessage != null,
@@ -316,7 +419,7 @@ fun SabBrowserApp(
                 exit = fadeOut() + slideOutVertically { it },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 86.dp)
+                    .padding(bottom = if (isBottomAddressBar) 144.dp else 86.dp)
             ) {
                 Surface(
                     color = sabColors.chromeSurfaceElevated,
@@ -340,4 +443,13 @@ fun SabBrowserApp(
             )
         }
     }
+}
+
+private fun shareText(context: android.content.Context, subject: String, text: String) {
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        putExtra(Intent.EXTRA_TEXT, text)
+        putExtra(Intent.EXTRA_SUBJECT, subject)
+        type = "text/plain"
+    }
+    context.startActivity(Intent.createChooser(sendIntent, "Share"))
 }

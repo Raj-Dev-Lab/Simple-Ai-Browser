@@ -7,12 +7,17 @@ import android.view.View
 import android.view.ViewGroup
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
+import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
+import com.simpleaibrowser.sab.core.browser.DownloadRequest
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.FindInPageResult
 import com.simpleaibrowser.sab.core.browser.PageContextSnapshot
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SecurityState
+import com.simpleaibrowser.sab.core.browser.SessionCallbacks
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.UrlResolver
+import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +33,8 @@ import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.StorageController
 import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebResponse
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "SabGeckoEngine"
@@ -36,7 +43,7 @@ private const val SAB_EXTENSION_URI = "resource://android/assets/extensions/sab-
 private const val SAB_NATIVE_APP = "sabBridge"
 
 /**
- * Production Mozilla GeckoView 161.0 (non-omni, arm64-v8a, Android 10+) adapter
+ * Production Mozilla GeckoView 161.0 (non-omni, arm64-v8a & x86_64, Android 10+) adapter
  * implementing SAB's Opera-inspired engine-agnostic BrowserEngine contract.
  */
 class GeckoEngineAdapter(
@@ -59,7 +66,7 @@ class GeckoEngineAdapter(
             abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a",
             isGeckoViewActive = true,
             builtInExtensionReady = extensionReady.get(),
-            notes = "Pre-compiled GeckoView 161+ (non-omni, arm64-v8a & x86_64) with Enhanced Tracking Protection & sab-bridge WebExtension"
+            notes = "Pre-compiled GeckoView 161+ (non-omni, arm64-v8a & x86_64) with Enhanced Tracking Protection, Download/Prompt/Fullscreen delegates & sab-bridge WebExtension"
         )
 
     override fun createRenderView(context: Context): View {
@@ -75,18 +82,14 @@ class GeckoEngineAdapter(
     override fun createSession(
         tabId: String,
         isPrivate: Boolean,
-        onNewTabRequested: (url: String, parentTabId: String, isPrivate: Boolean) -> Unit,
-        onHistoryVisit: (url: String, title: String) -> Unit,
-        onTrackerBlocked: (tabId: String) -> Unit
+        callbacks: SessionCallbacks
     ): BrowserTabSession {
         return GeckoTabSession(
             id = tabId,
             isPrivate = isPrivate,
             runtime = runtime,
             extensionProvider = { sabExtension },
-            onNewTabRequested = onNewTabRequested,
-            onHistoryVisit = onHistoryVisit,
-            onTrackerBlocked = onTrackerBlocked
+            callbacks = callbacks
         )
     }
 
@@ -160,9 +163,7 @@ class GeckoTabSession(
     override val isPrivate: Boolean,
     private val runtime: GeckoRuntime,
     private val extensionProvider: () -> WebExtension?,
-    private val onNewTabRequested: (url: String, parentTabId: String, isPrivate: Boolean) -> Unit,
-    private val onHistoryVisit: (url: String, title: String) -> Unit,
-    private val onTrackerBlocked: (tabId: String) -> Unit
+    private val callbacks: SessionCallbacks
 ) : BrowserTabSession {
 
     private val _state = MutableStateFlow(
@@ -234,7 +235,7 @@ class GeckoTabSession(
             ): GeckoResult<AllowOrDeny> {
                 val uri = request.uri
                 if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW && uri.startsWith("http")) {
-                    onNewTabRequested(uri, id, isPrivate)
+                    callbacks.onNewTabRequested(uri, id, isPrivate)
                     return GeckoResult.fromValue(AllowOrDeny.DENY)
                 }
                 return GeckoResult.fromValue(AllowOrDeny.ALLOW)
@@ -245,7 +246,7 @@ class GeckoTabSession(
                 uri: String
             ): GeckoResult<GeckoSession>? {
                 if (uri.startsWith("http")) {
-                    onNewTabRequested(uri, id, isPrivate)
+                    callbacks.onNewTabRequested(uri, id, isPrivate)
                 }
                 return null
             }
@@ -278,7 +279,7 @@ class GeckoTabSession(
                     )
                 }
                 if (success && !isPrivate && !snapshot.isStartPage) {
-                    onHistoryVisit(snapshot.url, snapshot.title)
+                    callbacks.onHistoryVisit(snapshot.url, snapshot.title)
                 }
                 syncBridgeModes()
             }
@@ -303,6 +304,55 @@ class GeckoTabSession(
                     _state.update { it.copy(title = cleanTitle) }
                 }
             }
+
+            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                callbacks.onFullScreenChanged(fullScreen)
+            }
+
+            override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                val uri = response.uri
+                if (uri.isBlank()) return
+                val headers = response.headers
+                val mimeType = headers.entries.firstOrNull {
+                    it.key.equals("content-type", ignoreCase = true)
+                }?.value?.substringBefore(";")?.trim()
+                val contentLength = headers.entries.firstOrNull {
+                    it.key.equals("content-length", ignoreCase = true)
+                }?.value?.trim()?.toLongOrNull() ?: -1L
+                val disposition = headers.entries.firstOrNull {
+                    it.key.equals("content-disposition", ignoreCase = true)
+                }?.value
+                val fileNameFromHeader = disposition?.let { parseDispositionFileName(it) }
+                val fileName = fileNameFromHeader ?: UrlResolver.guessFileName(uri, mimeType)
+                callbacks.onDownloadRequested(
+                    DownloadRequest(
+                        url = uri,
+                        fileName = fileName,
+                        mimeType = mimeType,
+                        contentLength = contentLength
+                    )
+                )
+            }
+
+            override fun onContextMenu(
+                session: GeckoSession,
+                screenX: Int,
+                screenY: Int,
+                element: GeckoSession.ContentDelegate.ContextElement
+            ) {
+                val link = element.linkUri?.takeIf { it.isNotBlank() }
+                val media = element.srcUri?.takeIf { it.isNotBlank() }
+                if (link == null && media == null) return
+                callbacks.onContextMenu(
+                    ContextMenuTarget(
+                        tabId = id,
+                        linkUrl = link,
+                        mediaUrl = media,
+                        title = element.title?.takeIf { it.isNotBlank() }
+                            ?: element.altText?.takeIf { it.isNotBlank() }
+                    )
+                )
+            }
         }
 
         geckoSession.contentBlockingDelegate = object : ContentBlocking.Delegate {
@@ -311,9 +361,123 @@ class GeckoTabSession(
                 event: ContentBlocking.BlockEvent
             ) {
                 _state.update { it.copy(blockedTrackersCount = it.blockedTrackersCount + 1) }
-                onTrackerBlocked(id)
+                callbacks.onTrackerBlocked(id)
             }
         }
+
+        geckoSession.promptDelegate = object : GeckoSession.PromptDelegate {
+            override fun onAlertPrompt(
+                session: GeckoSession,
+                prompt: GeckoSession.PromptDelegate.AlertPrompt
+            ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
+                val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                val host = UrlResolver.extractHost(_state.value.url)
+                callbacks.onPromptRequested(
+                    WebPromptRequest.Alert(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        title = prompt.title?.ifBlank { host } ?: host,
+                        message = prompt.message.orEmpty(),
+                        onDismiss = { result.complete(prompt.dismiss()) }
+                    )
+                )
+                return result
+            }
+
+            override fun onButtonPrompt(
+                session: GeckoSession,
+                prompt: GeckoSession.PromptDelegate.ButtonPrompt
+            ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
+                val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                val host = UrlResolver.extractHost(_state.value.url)
+                callbacks.onPromptRequested(
+                    WebPromptRequest.Confirm(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        title = prompt.title?.ifBlank { host } ?: host,
+                        message = prompt.message.orEmpty(),
+                        onResult = { confirmed ->
+                            val response = if (confirmed) {
+                                prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.POSITIVE)
+                            } else {
+                                prompt.confirm(GeckoSession.PromptDelegate.ButtonPrompt.Type.NEGATIVE)
+                            }
+                            result.complete(response)
+                        }
+                    )
+                )
+                return result
+            }
+
+            override fun onTextPrompt(
+                session: GeckoSession,
+                prompt: GeckoSession.PromptDelegate.TextPrompt
+            ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> {
+                val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                val host = UrlResolver.extractHost(_state.value.url)
+                callbacks.onPromptRequested(
+                    WebPromptRequest.TextInput(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        title = prompt.title?.ifBlank { host } ?: host,
+                        message = prompt.message.orEmpty(),
+                        defaultValue = prompt.defaultValue.orEmpty(),
+                        onResult = { value ->
+                            val response = if (value != null) prompt.confirm(value) else prompt.dismiss()
+                            result.complete(response)
+                        }
+                    )
+                )
+                return result
+            }
+        }
+
+        geckoSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
+            override fun onContentPermissionRequest(
+                session: GeckoSession,
+                perm: GeckoSession.PermissionDelegate.ContentPermission
+            ): GeckoResult<Int> {
+                val result = GeckoResult<Int>()
+                val host = UrlResolver.extractHost(perm.uri)
+                val label = when (perm.permission) {
+                    GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> "access your location"
+                    GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> "show notifications"
+                    GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE -> "store persistent offline data"
+                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> "autoplay media with sound"
+                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE -> "autoplay muted media"
+                    GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> "play protected DRM media"
+                    GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS -> "access cross-site cookies"
+                    else -> "access site capability"
+                }
+                if (perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE) {
+                    result.complete(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                    return result
+                }
+                callbacks.onPromptRequested(
+                    WebPromptRequest.SitePermission(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        permissionLabel = label,
+                        onResult = { granted ->
+                            result.complete(
+                                if (granted) {
+                                    GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                                } else {
+                                    GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                                }
+                            )
+                        }
+                    )
+                )
+                return result
+            }
+        }
+    }
+
+    private fun parseDispositionFileName(disposition: String): String? {
+        val match = Regex("filename\\*?=(?:UTF-8''|\"?)([^\";\\r\\n]+)", RegexOption.IGNORE_CASE)
+            .find(disposition)
+        return match?.groupValues?.getOrNull(1)?.trim('"')?.trim()?.takeIf { it.isNotBlank() }
     }
 
     private fun attachBridgeMessageDelegate() {
@@ -344,6 +508,12 @@ class GeckoTabSession(
                 JSONObject().apply {
                     put("type", "SET_READER_MODE")
                     put("enabled", current.readerMode)
+                }
+            )
+            port.postMessage(
+                JSONObject().apply {
+                    put("type", "SET_TEXT_ZOOM")
+                    put("percent", current.textZoomPercent)
                 }
             )
         }
@@ -433,16 +603,59 @@ class GeckoTabSession(
         syncBridgeModes()
     }
 
+    override fun setTextZoom(percent: Int) {
+        val clamped = percent.coerceIn(75, 160)
+        _state.update { it.copy(textZoomPercent = clamped) }
+        syncBridgeModes()
+    }
+
     override fun findInPage(query: String) {
         if (query.isBlank()) {
             clearFindInPage()
         } else {
-            geckoSession.finder.find(query, GeckoSession.FINDER_FIND_MATCH_CASE.inv() and 0)
+            geckoSession.finder.find(query, 0).accept { res ->
+                callbacks.onFindResult(
+                    FindInPageResult(
+                        currentMatch = res?.current ?: 0,
+                        totalMatches = res?.total ?: 0
+                    )
+                )
+            }
+        }
+    }
+
+    override fun findNext(query: String) {
+        if (query.isBlank()) return
+        geckoSession.finder.find(query, 0).accept { res ->
+            callbacks.onFindResult(
+                FindInPageResult(
+                    currentMatch = res?.current ?: 0,
+                    totalMatches = res?.total ?: 0
+                )
+            )
+        }
+    }
+
+    override fun findPrevious(query: String) {
+        if (query.isBlank()) return
+        geckoSession.finder.find(query, GeckoSession.FINDER_FIND_BACKWARDS).accept { res ->
+            callbacks.onFindResult(
+                FindInPageResult(
+                    currentMatch = res?.current ?: 0,
+                    totalMatches = res?.total ?: 0
+                )
+            )
         }
     }
 
     override fun clearFindInPage() {
         geckoSession.finder.clear()
+        callbacks.onFindResult(FindInPageResult(0, 0))
+    }
+
+    override fun exitFullScreen() {
+        geckoSession.exitFullScreen()
+        callbacks.onFullScreenChanged(false)
     }
 
     override fun attachToView(view: View) {

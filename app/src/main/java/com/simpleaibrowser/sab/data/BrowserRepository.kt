@@ -1,7 +1,10 @@
 package com.simpleaibrowser.sab.data
 
+import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SearchEngine
+import com.simpleaibrowser.sab.core.browser.TabIsland
+import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.ThemePreset
 import kotlinx.coroutines.flow.Flow
 
@@ -12,6 +15,7 @@ class BrowserRepository(
     val speedDials: Flow<List<SpeedDialEntity>> = database.speedDialDao().observeAll()
     val bookmarks: Flow<List<BookmarkEntity>> = database.bookmarkDao().observeAll()
     val history: Flow<List<HistoryEntity>> = database.historyDao().observeRecent()
+    val downloads: Flow<List<DownloadEntity>> = database.downloadDao().observeAll()
     val settings: Flow<BrowserSettings> = preferences.settingsFlow
 
     suspend fun seedDefaultSpeedDialsIfEmpty() {
@@ -88,11 +92,89 @@ class BrowserRepository(
         database.historyDao().clearAll()
     }
 
+    suspend fun recordDownload(
+        systemDownloadId: Long,
+        fileName: String,
+        url: String,
+        mimeType: String?,
+        sizeBytes: Long
+    ) {
+        database.downloadDao().insert(
+            DownloadEntity(
+                systemDownloadId = systemDownloadId,
+                fileName = fileName,
+                url = url,
+                mimeType = mimeType ?: "application/octet-stream",
+                sizeBytes = sizeBytes,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun deleteDownloadRecord(id: Long) {
+        database.downloadDao().deleteById(id)
+    }
+
+    suspend fun clearDownloads() {
+        database.downloadDao().clearAll()
+    }
+
+    suspend fun saveSessionSnapshot(
+        regularTabs: List<TabUiState>,
+        activeTabId: String,
+        islands: List<TabIsland>
+    ) {
+        val dao = database.sessionSnapshotDao()
+        dao.clearSavedTabs()
+        dao.clearSavedIslands()
+        if (islands.isNotEmpty()) {
+            dao.insertIslands(
+                islands.mapIndexed { idx, island ->
+                    SavedIslandEntity(
+                        islandId = island.id,
+                        name = island.name,
+                        colorId = island.color.id,
+                        isCollapsed = island.isCollapsed,
+                        sortOrder = idx
+                    )
+                }
+            )
+        }
+        if (regularTabs.isNotEmpty()) {
+            dao.insertTabs(
+                regularTabs.mapIndexed { idx, tab ->
+                    SavedTabEntity(
+                        tabId = tab.id,
+                        title = tab.title,
+                        url = tab.url,
+                        islandId = tab.islandId,
+                        isActive = tab.id == activeTabId,
+                        sortOrder = idx
+                    )
+                }
+            )
+        }
+    }
+
+    suspend fun loadSessionSnapshot(): Pair<List<SavedTabEntity>, List<SavedIslandEntity>> {
+        val dao = database.sessionSnapshotDao()
+        return dao.getSavedTabs() to dao.getSavedIslands()
+    }
+
+    suspend fun clearSessionSnapshot() {
+        val dao = database.sessionSnapshotDao()
+        dao.clearSavedTabs()
+        dao.clearSavedIslands()
+    }
+
     suspend fun setAdBlockEnabled(enabled: Boolean) = preferences.setAdBlockEnabled(enabled)
     suspend fun setHttpsOnlyEnabled(enabled: Boolean) = preferences.setHttpsOnlyEnabled(enabled)
     suspend fun setForceDarkDefault(enabled: Boolean) = preferences.setForceDarkDefault(enabled)
     suspend fun setSearchEngine(engine: SearchEngine) = preferences.setSearchEngine(engine)
     suspend fun setThemePreset(preset: ThemePreset) = preferences.setThemePreset(preset)
+    suspend fun setAddressBarPosition(position: AddressBarPosition) = preferences.setAddressBarPosition(position)
+    suspend fun setRestoreTabsOnStart(enabled: Boolean) = preferences.setRestoreTabsOnStart(enabled)
+    suspend fun setDefaultTextZoom(percent: Int) = preferences.setDefaultTextZoom(percent)
     suspend fun setShowWallpaperOnStart(enabled: Boolean) = preferences.setShowWallpaperOnStart(enabled)
     suspend fun incrementBlockedTrackers(delta: Long = 1L) = preferences.incrementBlockedTrackers(delta)
     suspend fun resetBlockedCounter() = preferences.resetBlockedCounter()

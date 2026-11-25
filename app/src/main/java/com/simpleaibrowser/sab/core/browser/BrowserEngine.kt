@@ -13,6 +13,15 @@ enum class SecurityState {
     MIXED
 }
 
+enum class AddressBarPosition(val id: String, val displayName: String, val subtitle: String) {
+    TOP("top", "Top Address Bar", "Classic desktop-aligned bar above webpage"),
+    BOTTOM("bottom", "Bottom Address Bar", "Opera one-handed thumb-zone bar above navigation");
+
+    companion object {
+        fun fromId(id: String): AddressBarPosition = entries.firstOrNull { it.id == id } ?: TOP
+    }
+}
+
 enum class SearchEngine(
     val id: String,
     val displayName: String,
@@ -106,6 +115,7 @@ enum class IslandColor(val id: String, val hex: Long) {
 
     companion object {
         fun fromIndex(index: Int): IslandColor = entries[index.mod(entries.size)]
+        fun fromId(id: String): IslandColor = entries.firstOrNull { it.id == id } ?: CRIMSON
     }
 }
 
@@ -114,6 +124,11 @@ data class TabIsland(
     val name: String,
     val color: IslandColor,
     val isCollapsed: Boolean = false
+)
+
+data class FindInPageResult(
+    val currentMatch: Int = 0,
+    val totalMatches: Int = 0
 )
 
 data class TabUiState(
@@ -130,6 +145,7 @@ data class TabUiState(
     val desktopMode: Boolean = false,
     val forceDarkMode: Boolean = false,
     val readerMode: Boolean = false,
+    val textZoomPercent: Int = 100,
     val blockedTrackersCount: Int = 0,
     val lastVisitedTimestamp: Long = System.currentTimeMillis()
 ) {
@@ -144,6 +160,57 @@ data class PageContextSnapshot(
     val selectedText: String? = null
 )
 
+data class DownloadRequest(
+    val url: String,
+    val fileName: String,
+    val mimeType: String?,
+    val contentLength: Long = -1L
+)
+
+data class ContextMenuTarget(
+    val tabId: String,
+    val linkUrl: String?,
+    val mediaUrl: String?,
+    val title: String?
+)
+
+sealed interface WebPromptRequest {
+    val id: String
+    val originHost: String
+
+    data class Alert(
+        override val id: String,
+        override val originHost: String,
+        val title: String,
+        val message: String,
+        val onDismiss: () -> Unit
+    ) : WebPromptRequest
+
+    data class Confirm(
+        override val id: String,
+        override val originHost: String,
+        val title: String,
+        val message: String,
+        val onResult: (confirmed: Boolean) -> Unit
+    ) : WebPromptRequest
+
+    data class TextInput(
+        override val id: String,
+        override val originHost: String,
+        val title: String,
+        val message: String,
+        val defaultValue: String,
+        val onResult: (value: String?) -> Unit
+    ) : WebPromptRequest
+
+    data class SitePermission(
+        override val id: String,
+        override val originHost: String,
+        val permissionLabel: String,
+        val onResult: (granted: Boolean) -> Unit
+    ) : WebPromptRequest
+}
+
 data class EngineInfo(
     val name: String,
     val version: String,
@@ -151,6 +218,17 @@ data class EngineInfo(
     val isGeckoViewActive: Boolean,
     val builtInExtensionReady: Boolean,
     val notes: String
+)
+
+data class SessionCallbacks(
+    val onNewTabRequested: (url: String, parentTabId: String, isPrivate: Boolean) -> Unit,
+    val onHistoryVisit: (url: String, title: String) -> Unit,
+    val onTrackerBlocked: (tabId: String) -> Unit,
+    val onDownloadRequested: (DownloadRequest) -> Unit = {},
+    val onContextMenu: (ContextMenuTarget) -> Unit = {},
+    val onFullScreenChanged: (Boolean) -> Unit = {},
+    val onPromptRequested: (WebPromptRequest) -> Unit = {},
+    val onFindResult: (FindInPageResult) -> Unit = {}
 )
 
 /**
@@ -172,8 +250,12 @@ interface BrowserTabSession {
     fun setDesktopMode(enabled: Boolean)
     fun setForceDarkMode(enabled: Boolean)
     fun setReaderMode(enabled: Boolean)
+    fun setTextZoom(percent: Int)
     fun findInPage(query: String)
+    fun findNext(query: String)
+    fun findPrevious(query: String)
     fun clearFindInPage()
+    fun exitFullScreen()
     fun attachToView(view: View)
     fun detachFromView(view: View)
     suspend fun extractPageSnapshot(maxChars: Int = 12_000): PageContextSnapshot
@@ -191,9 +273,7 @@ interface BrowserEngine {
     fun createSession(
         tabId: String,
         isPrivate: Boolean,
-        onNewTabRequested: (url: String, parentTabId: String, isPrivate: Boolean) -> Unit,
-        onHistoryVisit: (url: String, title: String) -> Unit,
-        onTrackerBlocked: (tabId: String) -> Unit
+        callbacks: SessionCallbacks
     ): BrowserTabSession
 
     fun setAdBlockEnabled(enabled: Boolean)

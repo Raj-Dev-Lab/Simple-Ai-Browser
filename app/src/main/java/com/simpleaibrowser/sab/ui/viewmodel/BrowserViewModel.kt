@@ -1,35 +1,51 @@
 package com.simpleaibrowser.sab.ui.viewmodel
 
 import android.app.Application
+import android.app.DownloadManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
+import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
+import com.simpleaibrowser.sab.core.browser.DownloadRequest
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.FindInPageResult
 import com.simpleaibrowser.sab.core.browser.IslandColor
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SearchEngine
+import com.simpleaibrowser.sab.core.browser.SessionCallbacks
 import com.simpleaibrowser.sab.core.browser.TabIsland
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.ThemePreset
 import com.simpleaibrowser.sab.core.browser.UrlResolver
+import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.data.BookmarkEntity
 import com.simpleaibrowser.sab.data.BrowserPreferences
 import com.simpleaibrowser.sab.data.BrowserRepository
 import com.simpleaibrowser.sab.data.BrowserSettings
+import com.simpleaibrowser.sab.data.DownloadEntity
 import com.simpleaibrowser.sab.data.HistoryEntity
 import com.simpleaibrowser.sab.data.SabDatabase
 import com.simpleaibrowser.sab.data.SpeedDialEntity
 import com.simpleaibrowser.sab.engine.BrowserEngineFactory
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -47,7 +63,8 @@ sealed interface BrowserOverlay {
 
 enum class LibraryTab {
     BOOKMARKS,
-    HISTORY
+    HISTORY,
+    DOWNLOADS
 }
 
 data class ClosedTabRecord(
@@ -62,7 +79,7 @@ data class OmniboxSuggestion(
     val source: String // "Bookmark" | "History" | "Speed Dial"
 )
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class BrowserViewModel(application: Application) : AndroidViewModel(application) {
 
     val engine: BrowserEngine = BrowserEngineFactory.getOrCreate(application.applicationContext)
@@ -97,6 +114,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         initialValue = emptyList()
     )
 
+    val downloads: StateFlow<List<DownloadEntity>> = repository.downloads.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList()
+    )
+
     private val _sessions = MutableStateFlow<List<BrowserTabSession>>(emptyList())
     private val _activeTabId = MutableStateFlow<String>("")
     val activeTabId: StateFlow<String> = _activeTabId.asStateFlow()
@@ -126,8 +149,23 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _findQuery = MutableStateFlow("")
     val findQuery: StateFlow<String> = _findQuery.asStateFlow()
 
+    private val _findResult = MutableStateFlow(FindInPageResult())
+    val findResult: StateFlow<FindInPageResult> = _findResult.asStateFlow()
+
+    private val _isFullScreen = MutableStateFlow(false)
+    val isFullScreen: StateFlow<Boolean> = _isFullScreen.asStateFlow()
+
+    private val _contextMenuTarget = MutableStateFlow<ContextMenuTarget?>(null)
+    val contextMenuTarget: StateFlow<ContextMenuTarget?> = _contextMenuTarget.asStateFlow()
+
+    private val _activePrompt = MutableStateFlow<WebPromptRequest?>(null)
+    val activePrompt: StateFlow<WebPromptRequest?> = _activePrompt.asStateFlow()
+
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
+
+    @Volatile
+    private var isSessionHydrated = false
 
     val tabs: StateFlow<List<TabUiState>> = combine(_sessions, _tabIslandAssignment) { list, islandMap ->
         list to islandMap
@@ -204,7 +242,64 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 engine.setPreferredDarkScheme(pref.themePreset.isDark)
             }
         }
-        createNewTab(isPrivate = false, initialUrl = null, select = true)
+        viewModelScope.launch {
+            hydratePreviousSessionOrCreateFresh()
+        }
+        viewModelScope.launch {
+            combine(tabs, _activeTabId, _islands) { tabList, currentId, islandList ->
+                Triple(tabList, currentId, islandList)
+            }
+                .debounce(650L)
+                .collect { (tabList, currentId, islandList) ->
+                    if (!isSessionHydrated) return@collect
+                    if (!settings.value.restoreTabsOnStart) return@collect
+                    val regularTabs = tabList.filterNot { it.isPrivate }
+                    repository.saveSessionSnapshot(
+                        regularTabs = regularTabs,
+                        activeTabId = currentId,
+                        islands = islandList
+                    )
+                }
+        }
+    }
+
+    private suspend fun hydratePreviousSessionOrCreateFresh() {
+        val initialSettings = runCatching { repository.settings.first() }.getOrDefault(BrowserSettings())
+        if (initialSettings.restoreTabsOnStart) {
+            val (savedTabs, savedIslands) = runCatching { repository.loadSessionSnapshot() }
+                .getOrDefault(emptyList<com.simpleaibrowser.sab.data.SavedTabEntity>() to emptyList())
+            if (savedTabs.isNotEmpty()) {
+                val restoredIslands = savedIslands.map { entity ->
+                    TabIsland(
+                        id = entity.islandId,
+                        name = entity.name,
+                        color = IslandColor.fromId(entity.colorId),
+                        isCollapsed = entity.isCollapsed
+                    )
+                }
+                _islands.value = restoredIslands
+                var selectedId: String? = null
+                savedTabs.forEach { saved ->
+                    val createdId = createNewTab(
+                        isPrivate = false,
+                        initialUrl = saved.url.takeIf { it != SAB_START_URL && it.isNotBlank() },
+                        islandId = saved.islandId,
+                        select = false,
+                        preferredTabId = saved.tabId
+                    )
+                    if (saved.isActive) {
+                        selectedId = createdId
+                    }
+                }
+                _activeTabId.value = selectedId ?: _sessions.value.firstOrNull()?.id.orEmpty()
+                isSessionHydrated = true
+                return
+            }
+        }
+        if (_sessions.value.isEmpty()) {
+            createNewTab(isPrivate = false, initialUrl = null, select = true)
+        }
+        isSessionHydrated = true
     }
 
     fun dismissSplash() {
@@ -233,6 +328,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _overlay.value = BrowserOverlay.None
     }
 
+    fun dismissContextMenu() {
+        _contextMenuTarget.value = null
+    }
+
+    fun dismissPrompt() {
+        _activePrompt.value = null
+    }
+
     fun handleIncomingExternalUri(uri: String?) {
         if (uri.isNullOrBlank()) return
         val resolved = UrlResolver.resolve(uri, settings.value.searchEngine, settings.value.httpsOnlyEnabled)
@@ -244,12 +347,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         initialUrl: String? = null,
         parentTabId: String? = null,
         islandId: String? = null,
-        select: Boolean = true
+        select: Boolean = true,
+        preferredTabId: String? = null
     ): String {
-        val tabId = "tab-${UUID.randomUUID().toString().take(8)}"
-        val session = engine.createSession(
-            tabId = tabId,
-            isPrivate = isPrivate,
+        val tabId = preferredTabId ?: "tab-${UUID.randomUUID().toString().take(8)}"
+        val callbacks = SessionCallbacks(
             onNewTabRequested = { url, originTabId, privateFlag ->
                 viewModelScope.launch {
                     createChildTabInIsland(url = url, parentTabId = originTabId, isPrivate = privateFlag)
@@ -264,10 +366,34 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 viewModelScope.launch {
                     repository.incrementBlockedTrackers(1L)
                 }
+            },
+            onDownloadRequested = { request ->
+                enqueueDownload(request)
+            },
+            onContextMenu = { target ->
+                _contextMenuTarget.value = target
+            },
+            onFullScreenChanged = { fullScreen ->
+                _isFullScreen.value = fullScreen
+            },
+            onPromptRequested = { prompt ->
+                _activePrompt.value = prompt
+            },
+            onFindResult = { result ->
+                _findResult.value = result
             }
         )
-        if (settings.value.forceDarkDefault) {
+        val session = engine.createSession(
+            tabId = tabId,
+            isPrivate = isPrivate,
+            callbacks = callbacks
+        )
+        val currentSettings = settings.value
+        if (currentSettings.forceDarkDefault) {
             session.setForceDarkMode(true)
+        }
+        if (currentSettings.defaultTextZoom != 100) {
+            session.setTextZoom(currentSettings.defaultTextZoom)
         }
         _sessions.update { it + session }
 
@@ -286,6 +412,106 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             _overlay.value = BrowserOverlay.None
         }
         return tabId
+    }
+
+    fun openLinkInNewTab(url: String, inIsland: Boolean = false, isPrivate: Boolean = false) {
+        _contextMenuTarget.value = null
+        val currentId = _activeTabId.value.takeIf { it.isNotBlank() }
+        if (inIsland && !isPrivate && currentId != null) {
+            createChildTabInIsland(url = url, parentTabId = currentId, isPrivate = false)
+        } else {
+            createNewTab(isPrivate = isPrivate, initialUrl = url, select = true)
+        }
+    }
+
+    fun copyTextToClipboard(label: String, text: String) {
+        val cm = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        cm?.setPrimaryClip(ClipData.newPlainText(label, text))
+        showToast("Copied $label")
+    }
+
+    fun downloadUrl(url: String) {
+        _contextMenuTarget.value = null
+        enqueueDownload(
+            DownloadRequest(
+                url = url,
+                fileName = UrlResolver.guessFileName(url, null),
+                mimeType = null,
+                contentLength = -1L
+            )
+        )
+    }
+
+    fun enqueueDownload(request: DownloadRequest) {
+        val uri = runCatching { Uri.parse(request.url) }.getOrNull()
+        val scheme = uri?.scheme?.lowercase()
+        if (uri == null || (scheme != "http" && scheme != "https")) {
+            showToast("Unsupported download link")
+            return
+        }
+        runCatching {
+            val dm = getApplication<Application>().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val dmRequest = DownloadManager.Request(uri)
+                .setTitle(request.fileName)
+                .setDescription("Downloading via Simple AI Browser")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, request.fileName)
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(true)
+            if (!request.mimeType.isNullOrBlank()) {
+                dmRequest.setMimeType(request.mimeType)
+            }
+            val downloadId = dm.enqueue(dmRequest)
+            viewModelScope.launch {
+                repository.recordDownload(
+                    systemDownloadId = downloadId,
+                    fileName = request.fileName,
+                    url = request.url,
+                    mimeType = request.mimeType,
+                    sizeBytes = request.contentLength
+                )
+            }
+            showToast("Downloading ${request.fileName}")
+        }.onFailure {
+            showToast("Download could not start")
+        }
+    }
+
+    fun openDownloadedFile(context: Context, item: DownloadEntity) {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        val fileUri = runCatching {
+            if (item.systemDownloadId > 0L) dm?.getUriForDownloadedFile(item.systemDownloadId) else null
+        }.getOrNull()
+        if (fileUri != null) {
+            val mime = dm?.getMimeTypeForDownloadedFile(item.systemDownloadId) ?: item.mimeType
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(fileUri, mime.ifBlank { "*/*" })
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val launched = runCatching { context.startActivity(viewIntent) }.isSuccess
+            if (launched) return
+        }
+        val fallback = runCatching {
+            context.startActivity(
+                Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        }.isSuccess
+        if (!fallback) {
+            showToast("File is in your Android Downloads folder")
+        }
+    }
+
+    fun deleteDownloadRecord(id: Long) {
+        viewModelScope.launch { repository.deleteDownloadRecord(id) }
+    }
+
+    fun clearDownloads() {
+        viewModelScope.launch {
+            repository.clearDownloads()
+            showToast("Cleared downloads list")
+        }
     }
 
     private fun createChildTabInIsland(url: String, parentTabId: String, isPrivate: Boolean) {
@@ -343,6 +569,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _islands.update { list ->
             list.map { if (it.id == islandId) it.copy(name = trimmed) else it }
         }
+        showToast("Renamed island to \"$trimmed\"")
     }
 
     fun assignTabToIsland(tabId: String, islandId: String?) {
@@ -364,7 +591,23 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             _activeTabId.value = tabId
             _overlay.value = BrowserOverlay.None
             _isFindInPageVisible.value = false
+            _findResult.value = FindInPageResult()
         }
+    }
+
+    fun switchToAdjacentTab(step: Int) {
+        val current = activeTab.value
+        val sameModeTabs = _sessions.value.filter { it.isPrivate == current.isPrivate }
+        if (sameModeTabs.size <= 1) return
+        val idx = sameModeTabs.indexOfFirst { it.id == current.id }
+        if (idx == -1) return
+        val nextIdx = (idx + step).mod(sameModeTabs.size)
+        val target = sameModeTabs[nextIdx]
+        _activeTabId.value = target.id
+        _isFindInPageVisible.value = false
+        _findResult.value = FindInPageResult()
+        val label = target.state.value.title.take(26)
+        showToast("Switched to $label")
     }
 
     fun closeTab(tabId: String) {
@@ -466,10 +709,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun navigateHome() {
         _isOmniboxEditing.value = false
         _isFindInPageVisible.value = false
+        _findResult.value = FindInPageResult()
         activeSession.value?.showStartPage()
     }
 
+    fun exitFullScreen() {
+        activeSession.value?.exitFullScreen()
+        _isFullScreen.value = false
+    }
+
     fun goBack(): Boolean {
+        if (_isFullScreen.value) {
+            exitFullScreen()
+            return true
+        }
+        if (_contextMenuTarget.value != null) {
+            _contextMenuTarget.value = null
+            return true
+        }
         if (_isOmniboxEditing.value) {
             _isOmniboxEditing.value = false
             return true
@@ -515,6 +772,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         showToast(if (next) "Reader focus active" else "Standard layout restored")
     }
 
+    fun adjustActiveTabTextZoom(delta: Int) {
+        val current = activeTab.value.textZoomPercent
+        val next = (current + delta).coerceIn(75, 160)
+        activeSession.value?.setTextZoom(next)
+    }
+
+    fun resetActiveTabTextZoom() {
+        activeSession.value?.setTextZoom(100)
+    }
+
     fun openFindInPage() {
         _overlay.value = BrowserOverlay.None
         _isFindInPageVisible.value = true
@@ -525,9 +792,20 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         activeSession.value?.findInPage(query)
     }
 
+    fun findNextMatch() {
+        val q = _findQuery.value
+        if (q.isNotBlank()) activeSession.value?.findNext(q)
+    }
+
+    fun findPreviousMatch() {
+        val q = _findQuery.value
+        if (q.isNotBlank()) activeSession.value?.findPrevious(q)
+    }
+
     fun closeFindInPage() {
         _isFindInPageVisible.value = false
         _findQuery.value = ""
+        _findResult.value = FindInPageResult()
         activeSession.value?.clearFindInPage()
     }
 
@@ -576,6 +854,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun clearAllBrowsingData() {
         viewModelScope.launch {
             repository.clearHistory()
+            repository.clearSessionSnapshot()
             engine.clearBrowsingData()
             _recentlyClosed.value = emptyList()
             showToast("History, cache, and cookies cleared")
@@ -606,6 +885,30 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun setThemePreset(preset: ThemePreset) {
         viewModelScope.launch { repository.setThemePreset(preset) }
+    }
+
+    fun setAddressBarPosition(position: AddressBarPosition) {
+        viewModelScope.launch {
+            repository.setAddressBarPosition(position)
+            showToast(position.displayName)
+        }
+    }
+
+    fun setRestoreTabsOnStart(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setRestoreTabsOnStart(enabled)
+            if (!enabled) {
+                repository.clearSessionSnapshot()
+            }
+        }
+    }
+
+    fun setDefaultTextZoom(percent: Int) {
+        val clamped = percent.coerceIn(75, 160)
+        viewModelScope.launch {
+            repository.setDefaultTextZoom(clamped)
+            activeSession.value?.setTextZoom(clamped)
+        }
     }
 
     fun setShowWallpaperOnStart(enabled: Boolean) {

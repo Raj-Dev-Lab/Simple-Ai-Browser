@@ -8,6 +8,8 @@ import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -19,24 +21,28 @@ import android.widget.FrameLayout
 import com.simpleaibrowser.sab.core.browser.AdBlockFilterList
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
+import com.simpleaibrowser.sab.core.browser.DownloadRequest
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.FindInPageResult
 import com.simpleaibrowser.sab.core.browser.PageContextSnapshot
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SecurityState
+import com.simpleaibrowser.sab.core.browser.SessionCallbacks
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.UrlResolver
+import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.io.ByteArrayInputStream
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Compatibility fallback adapter implementing BrowserEngine on non-ARM64 host
- * emulators (e.g., x86_64 preview containers without ARM64 native translation).
- * On Android 10+ ARM64 devices, GeckoEngineAdapter (GeckoView 161 arm64-v8a)
- * is always selected first.
+ * Compatibility fallback adapter implementing BrowserEngine if native GeckoView
+ * runtime initialization ever fails on an unsupported host environment.
+ * On Android 10+ arm64-v8a & x86_64 devices, GeckoEngineAdapter is always primary.
  */
 class CompatWebViewEngine(
     private val context: Context,
@@ -47,12 +53,12 @@ class CompatWebViewEngine(
 
     override val engineInfo: EngineInfo
         get() = EngineInfo(
-            name = "Compat WebView (x86_64 Host Guard)",
-            version = "System WebView • GeckoView 161 arm64-v8a packaged",
+            name = "Compat WebView (Fallback Guard)",
+            version = "System WebView • GeckoView 161 packaged",
             abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
             isGeckoViewActive = false,
             builtInExtensionReady = true,
-            notes = "Running host compatibility engine because this device lacks arm64-v8a execution ($fallbackReason). Install on an ARM64 Android 10+ device for native GeckoView 161."
+            notes = "Running fallback compatibility engine ($fallbackReason)."
         )
 
     override fun createRenderView(context: Context): View {
@@ -68,17 +74,14 @@ class CompatWebViewEngine(
     override fun createSession(
         tabId: String,
         isPrivate: Boolean,
-        onNewTabRequested: (url: String, parentTabId: String, isPrivate: Boolean) -> Unit,
-        onHistoryVisit: (url: String, title: String) -> Unit,
-        onTrackerBlocked: (tabId: String) -> Unit
+        callbacks: SessionCallbacks
     ): BrowserTabSession {
         return CompatWebViewTabSession(
             id = tabId,
             isPrivate = isPrivate,
             context = context.applicationContext,
             adBlockEnabled = { adBlockEnabled.get() },
-            onHistoryVisit = onHistoryVisit,
-            onTrackerBlocked = onTrackerBlocked
+            callbacks = callbacks
         )
     }
 
@@ -103,8 +106,7 @@ private class CompatWebViewTabSession(
     override val isPrivate: Boolean,
     private val context: Context,
     private val adBlockEnabled: () -> Boolean,
-    private val onHistoryVisit: (url: String, title: String) -> Unit,
-    private val onTrackerBlocked: (tabId: String) -> Unit
+    private val callbacks: SessionCallbacks
 ) : BrowserTabSession {
 
     private val _state = MutableStateFlow(
@@ -137,6 +139,25 @@ private class CompatWebViewTabSession(
             settings.cacheMode = WebSettings.LOAD_NO_CACHE
         }
         defaultUserAgent = settings.userAgentString
+        setDownloadListener { url, _, _, mimeType, contentLength ->
+            if (url.isNullOrBlank()) return@setDownloadListener
+            callbacks.onDownloadRequested(
+                DownloadRequest(
+                    url = url,
+                    fileName = UrlResolver.guessFileName(url, mimeType),
+                    mimeType = mimeType,
+                    contentLength = contentLength
+                )
+            )
+        }
+        setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
+            callbacks.onFindResult(
+                FindInPageResult(
+                    currentMatch = if (numberOfMatches > 0) activeMatchOrdinal + 1 else 0,
+                    totalMatches = numberOfMatches
+                )
+            )
+        }
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView?,
@@ -145,7 +166,7 @@ private class CompatWebViewTabSession(
                 val host = request?.url?.host
                 if (adBlockEnabled() && AdBlockFilterList.isBlockedHost(host)) {
                     _state.update { it.copy(blockedTrackersCount = it.blockedTrackersCount + 1) }
-                    onTrackerBlocked(this@CompatWebViewTabSession.id)
+                    callbacks.onTrackerBlocked(this@CompatWebViewTabSession.id)
                     return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                 }
                 return super.shouldInterceptRequest(view, request)
@@ -181,7 +202,7 @@ private class CompatWebViewTabSession(
                     )
                 }
                 if (!isPrivate && !current.isStartPage && finalUrl.startsWith("http")) {
-                    onHistoryVisit(finalUrl, finalTitle)
+                    callbacks.onHistoryVisit(finalUrl, finalTitle)
                 }
                 applyInjectedStyles()
             }
@@ -195,6 +216,65 @@ private class CompatWebViewTabSession(
                 if (!title.isNullOrBlank() && !_state.value.isStartPage) {
                     _state.update { it.copy(title = title) }
                 }
+            }
+
+            override fun onJsAlert(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                result: JsResult?
+            ): Boolean {
+                val host = UrlResolver.extractHost(url ?: _state.value.url)
+                callbacks.onPromptRequested(
+                    WebPromptRequest.Alert(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        title = host,
+                        message = message.orEmpty(),
+                        onDismiss = { result?.confirm() }
+                    )
+                )
+                return true
+            }
+
+            override fun onJsConfirm(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                result: JsResult?
+            ): Boolean {
+                val host = UrlResolver.extractHost(url ?: _state.value.url)
+                callbacks.onPromptRequested(
+                    WebPromptRequest.Confirm(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        title = host,
+                        message = message.orEmpty(),
+                        onResult = { ok -> if (ok) result?.confirm() else result?.cancel() }
+                    )
+                )
+                return true
+            }
+
+            override fun onJsPrompt(
+                view: WebView?,
+                url: String?,
+                message: String?,
+                defaultValue: String?,
+                result: JsPromptResult?
+            ): Boolean {
+                val host = UrlResolver.extractHost(url ?: _state.value.url)
+                callbacks.onPromptRequested(
+                    WebPromptRequest.TextInput(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        title = host,
+                        message = message.orEmpty(),
+                        defaultValue = defaultValue.orEmpty(),
+                        onResult = { value -> if (value != null) result?.confirm(value) else result?.cancel() }
+                    )
+                )
+                return true
             }
         }
     }
@@ -288,12 +368,31 @@ private class CompatWebViewTabSession(
         applyInjectedStyles()
     }
 
+    override fun setTextZoom(percent: Int) {
+        val clamped = percent.coerceIn(75, 160)
+        _state.update { it.copy(textZoomPercent = clamped) }
+        webView.settings.textZoom = clamped
+    }
+
     override fun findInPage(query: String) {
         if (query.isBlank()) clearFindInPage() else webView.findAllAsync(query)
     }
 
+    override fun findNext(query: String) {
+        if (query.isNotBlank()) webView.findNext(true)
+    }
+
+    override fun findPrevious(query: String) {
+        if (query.isNotBlank()) webView.findNext(false)
+    }
+
     override fun clearFindInPage() {
         webView.clearMatches()
+        callbacks.onFindResult(FindInPageResult(0, 0))
+    }
+
+    override fun exitFullScreen() {
+        callbacks.onFullScreenChanged(false)
     }
 
     override fun attachToView(view: View) {

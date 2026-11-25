@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Search
@@ -57,13 +58,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
+import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.SearchEngine
 import com.simpleaibrowser.sab.core.browser.ThemePreset
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.data.BookmarkEntity
 import com.simpleaibrowser.sab.data.BrowserSettings
+import com.simpleaibrowser.sab.data.DownloadEntity
 import com.simpleaibrowser.sab.data.HistoryEntity
+import com.simpleaibrowser.sab.ui.components.SiteFavicon
 import com.simpleaibrowser.sab.ui.theme.JetBrainsMonoFamily
 import com.simpleaibrowser.sab.ui.theme.LocalSabColors
 import com.simpleaibrowser.sab.ui.viewmodel.LibraryTab
@@ -76,10 +80,14 @@ fun LibraryScreen(
     initialTab: LibraryTab,
     bookmarks: List<BookmarkEntity>,
     history: List<HistoryEntity>,
+    downloads: List<DownloadEntity>,
     onOpenUrl: (String) -> Unit,
+    onOpenDownload: (DownloadEntity) -> Unit,
     onDeleteBookmark: (Long) -> Unit,
     onDeleteHistory: (Long) -> Unit,
+    onDeleteDownload: (Long) -> Unit,
     onClearHistory: () -> Unit,
+    onClearDownloads: () -> Unit,
     onDismiss: () -> Unit
 ) {
     BackHandler(onBack = onDismiss)
@@ -99,6 +107,12 @@ fun LibraryScreen(
         val q = searchQuery.trim().lowercase()
         if (q.isEmpty()) history else history.filter {
             it.title.lowercase().contains(q) || it.url.lowercase().contains(q)
+        }
+    }
+    val filteredDownloads = remember(downloads, searchQuery) {
+        val q = searchQuery.trim().lowercase()
+        if (q.isEmpty()) downloads else downloads.filter {
+            it.fileName.lowercase().contains(q) || it.url.lowercase().contains(q)
         }
     }
 
@@ -121,11 +135,17 @@ fun LibraryScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                     Text(
-                        text = if (activeTab == LibraryTab.BOOKMARKS) "Bookmarks" else "History",
+                        text = when (activeTab) {
+                            LibraryTab.BOOKMARKS -> "Bookmarks"
+                            LibraryTab.HISTORY -> "History"
+                            LibraryTab.DOWNLOADS -> "Downloads"
+                        },
                         style = MaterialTheme.typography.titleLarge
                     )
                 }
-                if (activeTab == LibraryTab.HISTORY && history.isNotEmpty()) {
+                val showClearButton = (activeTab == LibraryTab.HISTORY && history.isNotEmpty()) ||
+                    (activeTab == LibraryTab.DOWNLOADS && downloads.isNotEmpty())
+                if (showClearButton) {
                     TextButton(onClick = { confirmClear = true }) {
                         Icon(Icons.Filled.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
@@ -134,7 +154,7 @@ fun LibraryScreen(
                 }
             }
 
-            // Segmented Toggle
+            // 3-Segment Library Toggle
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -145,7 +165,7 @@ fun LibraryScreen(
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 LibrarySegmentChip(
-                    label = "Bookmarks (${bookmarks.size})",
+                    label = "Saved (${bookmarks.size})",
                     selected = activeTab == LibraryTab.BOOKMARKS,
                     onClick = { activeTab = LibraryTab.BOOKMARKS },
                     modifier = Modifier.weight(1f)
@@ -154,6 +174,12 @@ fun LibraryScreen(
                     label = "History (${history.size})",
                     selected = activeTab == LibraryTab.HISTORY,
                     onClick = { activeTab = LibraryTab.HISTORY },
+                    modifier = Modifier.weight(1f)
+                )
+                LibrarySegmentChip(
+                    label = "Files (${downloads.size})",
+                    selected = activeTab == LibraryTab.DOWNLOADS,
+                    onClick = { activeTab = LibraryTab.DOWNLOADS },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -179,47 +205,80 @@ fun LibraryScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                if (activeTab == LibraryTab.BOOKMARKS) {
-                    if (filteredBookmarks.isEmpty()) {
-                        item {
-                            EmptyLibraryCard(
-                                icon = Icons.Filled.Bookmark,
-                                title = "No bookmarks yet",
-                                subtitle = "Tap the Bookmark star in the Opera menu on any webpage to save it here."
-                            )
-                        }
-                    } else {
-                        items(filteredBookmarks, key = { it.id }) { bm ->
-                            LibraryItemRow(
-                                title = bm.title,
-                                subtitle = bm.url,
-                                badge = UrlResolver.extractMonogram(bm.title),
-                                onClick = { onOpenUrl(bm.url) },
-                                onDelete = { onDeleteBookmark(bm.id) }
-                            )
+                when (activeTab) {
+                    LibraryTab.BOOKMARKS -> {
+                        if (filteredBookmarks.isEmpty()) {
+                            item {
+                                EmptyLibraryCard(
+                                    icon = Icons.Filled.Bookmark,
+                                    title = "No bookmarks yet",
+                                    subtitle = "Tap the Bookmark star in the Opera menu on any webpage to save it here."
+                                )
+                            }
+                        } else {
+                            items(filteredBookmarks, key = { it.id }) { bm ->
+                                LibrarySiteRow(
+                                    title = bm.title,
+                                    subtitle = bm.url,
+                                    url = bm.url,
+                                    onClick = { onOpenUrl(bm.url) },
+                                    onDelete = { onDeleteBookmark(bm.id) }
+                                )
+                            }
                         }
                     }
-                } else {
-                    if (filteredHistory.isEmpty()) {
-                        item {
-                            EmptyLibraryCard(
-                                icon = Icons.Filled.History,
-                                title = "History is clean",
-                                subtitle = "Pages you visit in regular tabs will appear here."
-                            )
-                        }
-                    } else {
-                        items(filteredHistory, key = { it.id }) { item ->
-                            val timeLabel = remember(item.visitedAt) {
-                                SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(item.visitedAt))
+
+                    LibraryTab.HISTORY -> {
+                        if (filteredHistory.isEmpty()) {
+                            item {
+                                EmptyLibraryCard(
+                                    icon = Icons.Filled.History,
+                                    title = "History is clean",
+                                    subtitle = "Pages you visit in regular tabs will appear here."
+                                )
                             }
-                            LibraryItemRow(
-                                title = item.title,
-                                subtitle = "$timeLabel • ${UrlResolver.extractHost(item.url)}",
-                                badge = UrlResolver.extractMonogram(item.title),
-                                onClick = { onOpenUrl(item.url) },
-                                onDelete = { onDeleteHistory(item.id) }
-                            )
+                        } else {
+                            items(filteredHistory, key = { it.id }) { item ->
+                                val timeLabel = remember(item.visitedAt) {
+                                    SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(item.visitedAt))
+                                }
+                                LibrarySiteRow(
+                                    title = item.title,
+                                    subtitle = "$timeLabel • ${UrlResolver.extractHost(item.url)}",
+                                    url = item.url,
+                                    onClick = { onOpenUrl(item.url) },
+                                    onDelete = { onDeleteHistory(item.id) }
+                                )
+                            }
+                        }
+                    }
+
+                    LibraryTab.DOWNLOADS -> {
+                        if (filteredDownloads.isEmpty()) {
+                            item {
+                                EmptyLibraryCard(
+                                    icon = Icons.Filled.Download,
+                                    title = "No downloads yet",
+                                    subtitle = "Files downloaded via GeckoView or long-press link menus appear here and save to your Android Downloads folder."
+                                )
+                            }
+                        } else {
+                            items(filteredDownloads, key = { it.id }) { dl ->
+                                val timeLabel = remember(dl.createdAt) {
+                                    SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(dl.createdAt))
+                                }
+                                val sizeLabel = remember(dl.sizeBytes) { formatBytes(dl.sizeBytes) }
+                                DownloadItemRow(
+                                    fileName = dl.fileName,
+                                    meta = buildString {
+                                        append(timeLabel)
+                                        if (sizeLabel.isNotEmpty()) append(" • $sizeLabel")
+                                        append(" • ${UrlResolver.extractHost(dl.url)}")
+                                    },
+                                    onClick = { onOpenDownload(dl) },
+                                    onDelete = { onDeleteDownload(dl.id) }
+                                )
+                            }
                         }
                     }
                 }
@@ -228,12 +287,23 @@ fun LibraryScreen(
     }
 
     if (confirmClear) {
+        val isDownloads = activeTab == LibraryTab.DOWNLOADS
         AlertDialog(
             onDismissRequest = { confirmClear = false },
-            title = { Text("Clear browsing history?") },
-            text = { Text("This clears visited URLs, cookies, and web storage across SAB.") },
+            title = { Text(if (isDownloads) "Clear downloads list?" else "Clear browsing history?") },
+            text = {
+                Text(
+                    if (isDownloads) "This removes entries from SAB's list. Saved files remain in your Android Downloads folder."
+                    else "This clears visited URLs, cookies, and web storage across SAB."
+                )
+            },
             confirmButton = {
-                TextButton(onClick = { onClearHistory(); confirmClear = false }) {
+                TextButton(
+                    onClick = {
+                        if (isDownloads) onClearDownloads() else onClearHistory()
+                        confirmClear = false
+                    }
+                ) {
                     Text("Clear All", color = MaterialTheme.colorScheme.error)
                 }
             },
@@ -250,6 +320,9 @@ fun SettingsScreen(
     engineInfo: EngineInfo,
     onSelectSearchEngine: (SearchEngine) -> Unit,
     onSelectThemePreset: (ThemePreset) -> Unit,
+    onSelectAddressBarPosition: (AddressBarPosition) -> Unit,
+    onToggleRestoreTabs: (Boolean) -> Unit,
+    onSelectDefaultTextZoom: (Int) -> Unit,
     onToggleAdBlock: (Boolean) -> Unit,
     onToggleHttpsOnly: (Boolean) -> Unit,
     onToggleForceDarkDefault: (Boolean) -> Unit,
@@ -289,6 +362,108 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
                 modifier = Modifier.weight(1f)
             ) {
+                // Navigation & Ergonomics
+                item(key = "ergonomics_section") {
+                    SettingsSectionCard(title = "NAVIGATION & ERGONOMICS") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "Address Bar Position",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            AddressBarPosition.entries.forEach { pos ->
+                                val selected = settings.addressBarPosition == pos
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                            else sabColors.chromeBar
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (selected) MaterialTheme.colorScheme.primary else sabColors.chromeBorder,
+                                            RoundedCornerShape(14.dp)
+                                        )
+                                        .clickable { onSelectAddressBarPosition(pos) }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(pos.displayName, style = MaterialTheme.typography.titleSmall)
+                                        Text(pos.subtitle, style = MaterialTheme.typography.bodySmall, color = sabColors.subtleText)
+                                    }
+                                    if (selected) {
+                                        Icon(Icons.Filled.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Restore Tabs & Islands on Startup",
+                                subtitle = "Reopen your regular tabs and Tab Islands next time SAB launches",
+                                checked = settings.restoreTabsOnStart,
+                                onCheckedChange = onToggleRestoreTabs
+                            )
+
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Default Page Text Zoom", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        text = "${settings.defaultTextZoom}%",
+                                        fontFamily = JetBrainsMonoFamily,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf(85, 100, 115, 130, 150).forEach { zoom ->
+                                        val isCurrent = settings.defaultTextZoom == zoom
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                                    else sabColors.chromeBar
+                                                )
+                                                .border(
+                                                    1.dp,
+                                                    if (isCurrent) MaterialTheme.colorScheme.primary else sabColors.chromeBorder,
+                                                    RoundedCornerShape(10.dp)
+                                                )
+                                                .clickable { onSelectDefaultTextZoom(zoom) }
+                                                .padding(vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "$zoom%",
+                                                fontFamily = JetBrainsMonoFamily,
+                                                fontSize = 11.sp,
+                                                color = if (isCurrent) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Theme Presets
                 item(key = "theme_section") {
                     SettingsSectionCard(title = "APPEARANCE & THEME") {
@@ -417,7 +592,7 @@ fun SettingsScreen(
                                         color = MaterialTheme.colorScheme.error
                                     )
                                     Text(
-                                        text = "Delete history, cookies, and web cache",
+                                        text = "Delete history, cookies, saved tabs, and web cache",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = sabColors.subtleText
                                     )
@@ -473,7 +648,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
             title = { Text("Clear all browsing data?") },
-            text = { Text("History, cookies, and engine storage will be permanently cleared.") },
+            text = { Text("History, cookies, saved session tabs, and engine storage will be permanently cleared.") },
             confirmButton = {
                 TextButton(onClick = { onClearAllData(); showClearDialog = false }) {
                     Text("Clear", color = MaterialTheme.colorScheme.error)
@@ -484,6 +659,15 @@ fun SettingsScreen(
             }
         )
     }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0L) return ""
+    val kb = bytes / 1024.0
+    if (kb < 1024.0) return String.format(Locale.US, "%.0f KB", kb)
+    val mb = kb / 1024.0
+    if (mb < 1024.0) return String.format(Locale.US, "%.1f MB", mb)
+    return String.format(Locale.US, "%.2f GB", mb / 1024.0)
 }
 
 @Composable
@@ -503,17 +687,67 @@ private fun LibrarySegmentChip(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (selected) MaterialTheme.colorScheme.primary else LocalSabColors.current.subtleText
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.primary else LocalSabColors.current.subtleText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
 
 @Composable
-private fun LibraryItemRow(
+private fun LibrarySiteRow(
     title: String,
     subtitle: String,
-    badge: String,
+    url: String,
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val sabColors = LocalSabColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(sabColors.chromeSurfaceElevated)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        SiteFavicon(
+            url = url,
+            title = title,
+            accentColor = MaterialTheme.colorScheme.primary,
+            size = 38.dp,
+            iconSize = 22.dp,
+            cornerRadius = 10.dp,
+            monogramSize = 15.sp
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = sabColors.subtleText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.Delete, contentDescription = "Delete item", tint = sabColors.subtleText, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+private fun DownloadItemRow(
+    fileName: String,
+    meta: String,
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -532,25 +766,25 @@ private fun LibraryItemRow(
             modifier = Modifier
                 .size(38.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                .background(sabColors.shieldGreen.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = badge,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
+            Icon(
+                imageVector = Icons.Filled.Download,
+                contentDescription = null,
+                tint = sabColors.shieldGreen,
+                modifier = Modifier.size(20.dp)
             )
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = title,
+                text = fileName,
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = subtitle,
+                text = meta,
                 style = MaterialTheme.typography.bodySmall,
                 color = sabColors.subtleText,
                 maxLines = 1,
@@ -558,7 +792,7 @@ private fun LibraryItemRow(
             )
         }
         IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Filled.Delete, contentDescription = "Delete item", tint = sabColors.subtleText, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Delete, contentDescription = "Remove download record", tint = sabColors.subtleText, modifier = Modifier.size(18.dp))
         }
     }
 }

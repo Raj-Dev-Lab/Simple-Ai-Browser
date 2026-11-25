@@ -1,9 +1,11 @@
 package com.simpleaibrowser.sab.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GridView
@@ -59,7 +62,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,8 +69,8 @@ import com.simpleaibrowser.sab.core.browser.SecurityState
 import com.simpleaibrowser.sab.core.browser.TabIsland
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.UrlResolver
+import com.simpleaibrowser.sab.ui.components.SiteFavicon
 import com.simpleaibrowser.sab.ui.theme.LocalSabColors
-import com.simpleaibrowser.sab.ui.theme.SpaceGroteskFamily
 import com.simpleaibrowser.sab.ui.viewmodel.ClosedTabRecord
 
 private enum class GallerySection {
@@ -89,6 +91,8 @@ fun TabGalleryScreen(
     onCloseAll: (Boolean) -> Unit,
     onReopenClosed: () -> Unit,
     onCreateIsland: (String) -> Unit,
+    onRenameIsland: (islandId: String, newName: String) -> Unit,
+    onAssignTabToIsland: (tabId: String, islandId: String?) -> Unit,
     onToggleIslandCollapsed: (String) -> Unit,
     onAddTabToIsland: (String) -> Unit,
     onCloseIsland: (String) -> Unit,
@@ -102,6 +106,9 @@ fun TabGalleryScreen(
     var filterQuery by remember { mutableStateOf("") }
     var showCreateIslandDialog by remember { mutableStateOf(false) }
     var newIslandName by remember { mutableStateOf("") }
+    var islandToRename by remember { mutableStateOf<TabIsland?>(null) }
+    var renameBuffer by remember { mutableStateOf("") }
+    var tabToAssignIsland by remember { mutableStateOf<TabUiState?>(null) }
 
     val regularTabs = remember(tabs, filterQuery) {
         tabs.filter { !it.isPrivate && matchesFilter(it, filterQuery) }
@@ -262,7 +269,8 @@ fun TabGalleryScreen(
                             emptyTitle = "No matching tabs",
                             emptySubtitle = "Open a new tab to explore the web.",
                             onSelectTab = onSelectTab,
-                            onCloseTab = onCloseTab
+                            onCloseTab = onCloseTab,
+                            onLongPressTab = { tab -> tabToAssignIsland = tab }
                         )
                     }
                     GallerySection.PRIVATE -> {
@@ -274,7 +282,8 @@ fun TabGalleryScreen(
                             emptyTitle = "No Private Tabs",
                             emptySubtitle = "Private tabs keep your browsing off local history and cookies.",
                             onSelectTab = onSelectTab,
-                            onCloseTab = onCloseTab
+                            onCloseTab = onCloseTab,
+                            onLongPressTab = {}
                         )
                     }
                     GallerySection.ISLANDS -> {
@@ -284,6 +293,10 @@ fun TabGalleryScreen(
                             activeTabId = activeTabId,
                             onSelectTab = onSelectTab,
                             onCloseTab = onCloseTab,
+                            onRenameIslandClick = { island ->
+                                islandToRename = island
+                                renameBuffer = island.name
+                            },
                             onToggleCollapsed = onToggleIslandCollapsed,
                             onAddTabToIsland = onAddTabToIsland,
                             onCloseIsland = onCloseIsland,
@@ -384,6 +397,101 @@ fun TabGalleryScreen(
             }
         )
     }
+
+    islandToRename?.let { target ->
+        AlertDialog(
+            onDismissRequest = { islandToRename = null },
+            title = { Text("Rename Tab Island") },
+            text = {
+                OutlinedTextField(
+                    value = renameBuffer,
+                    onValueChange = { renameBuffer = it },
+                    label = { Text("Island name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRenameIsland(target.id, renameBuffer)
+                        islandToRename = null
+                    }
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { islandToRename = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    tabToAssignIsland?.let { targetTab ->
+        AlertDialog(
+            onDismissRequest = { tabToAssignIsland = null },
+            title = { Text("Move Tab to Island") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = targetTab.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = sabColors.subtleText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(sabColors.chromeSurfaceElevated)
+                            .clickable {
+                                onAssignTabToIsland(targetTab.id, null)
+                                tabToAssignIsland = null
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Ungrouped (No Island)", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    islands.forEach { island ->
+                        val color = Color(island.color.hex)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (targetTab.islandId == island.id) color.copy(alpha = 0.2f)
+                                    else sabColors.chromeSurfaceElevated
+                                )
+                                .clickable {
+                                    onAssignTabToIsland(targetTab.id, island.id)
+                                    tabToAssignIsland = null
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(color)
+                            )
+                            Text(island.name, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { tabToAssignIsland = null }) {
+                    Text("Done")
+                }
+            }
+        )
+    }
 }
 
 private fun matchesFilter(tab: TabUiState, query: String): Boolean {
@@ -427,7 +535,8 @@ private fun TabCollectionContent(
     emptyTitle: String,
     emptySubtitle: String,
     onSelectTab: (String) -> Unit,
-    onCloseTab: (String) -> Unit
+    onCloseTab: (String) -> Unit,
+    onLongPressTab: (TabUiState) -> Unit
 ) {
     if (tabs.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -456,6 +565,7 @@ private fun TabCollectionContent(
                     isActive = tab.id == activeTabId,
                     island = tab.islandId?.let { islandById[it] },
                     onSelect = { onSelectTab(tab.id) },
+                    onLongPress = { onLongPressTab(tab) },
                     onClose = { onCloseTab(tab.id) }
                 )
             }
@@ -472,6 +582,7 @@ private fun TabCollectionContent(
                     isActive = tab.id == activeTabId,
                     island = tab.islandId?.let { islandById[it] },
                     onSelect = { onSelectTab(tab.id) },
+                    onLongPress = { onLongPressTab(tab) },
                     onClose = { onCloseTab(tab.id) }
                 )
             }
@@ -486,6 +597,7 @@ private fun TabIslandsContent(
     activeTabId: String,
     onSelectTab: (String) -> Unit,
     onCloseTab: (String) -> Unit,
+    onRenameIslandClick: (TabIsland) -> Unit,
     onToggleCollapsed: (String) -> Unit,
     onAddTabToIsland: (String) -> Unit,
     onCloseIsland: (String) -> Unit,
@@ -507,7 +619,7 @@ private fun TabIslandsContent(
                 )
                 Text("Organize with Tab Islands", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    text = "Links opened in new tabs automatically group into color-coded Tab Islands, or tap below to create one manually.",
+                    text = "Links opened in new tabs automatically group into color-coded Tab Islands. Long-press any tab in the Tabs view to move it into an Island.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = sabColors.subtleText
                 )
@@ -545,7 +657,8 @@ private fun TabIslandsContent(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
                             Box(
                                 modifier = Modifier
@@ -556,24 +669,37 @@ private fun TabIslandsContent(
                             Text(
                                 text = island.name,
                                 style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "${memberTabs.size} tabs",
+                                text = "${memberTabs.size}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = sabColors.subtleText
                             )
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
+                                onClick = { onRenameIslandClick(island) },
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Edit,
+                                    contentDescription = "Rename island",
+                                    tint = sabColors.subtleText,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            IconButton(
                                 onClick = { onAddTabToIsland(island.id) },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(34.dp)
                             ) {
                                 Icon(Icons.Filled.Add, contentDescription = "Add tab to island", tint = islandColor)
                             }
                             IconButton(
                                 onClick = { onCloseIsland(island.id) },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(34.dp)
                             ) {
                                 Icon(Icons.Filled.Close, contentDescription = "Close island", tint = sabColors.subtleText)
                             }
@@ -594,6 +720,7 @@ private fun TabIslandsContent(
                                     isActive = tab.id == activeTabId,
                                     island = null,
                                     onSelect = { onSelectTab(tab.id) },
+                                    onLongPress = {},
                                     onClose = { onCloseTab(tab.id) }
                                 )
                             }
@@ -605,15 +732,18 @@ private fun TabIslandsContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TabPreviewCard(
     tab: TabUiState,
     isActive: Boolean,
     island: TabIsland?,
     onSelect: () -> Unit,
+    onLongPress: () -> Unit,
     onClose: () -> Unit
 ) {
     val sabColors = LocalSabColors.current
+    val accent = if (tab.isPrivate) sabColors.privateAccent else MaterialTheme.colorScheme.primary
     val borderColor = when {
         isActive && tab.isPrivate -> sabColors.privateAccent
         isActive -> MaterialTheme.colorScheme.primary
@@ -629,7 +759,7 @@ private fun TabPreviewCard(
             .height(152.dp)
             .border(if (isActive) 2.dp else 1.dp, borderColor, RoundedCornerShape(18.dp))
             .clip(RoundedCornerShape(18.dp))
-            .clickable(onClick = onSelect)
+            .combinedClickable(onClick = onSelect, onLongClick = onLongPress)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Card Header
@@ -683,12 +813,14 @@ private fun TabPreviewCard(
                 contentAlignment = Alignment.CenterStart
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = UrlResolver.extractMonogram(tab.title),
-                        fontFamily = SpaceGroteskFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 26.sp,
-                        color = if (tab.isPrivate) sabColors.privateAccent else MaterialTheme.colorScheme.primary
+                    SiteFavicon(
+                        url = tab.url,
+                        title = tab.title,
+                        accentColor = accent,
+                        size = 42.dp,
+                        iconSize = 26.dp,
+                        cornerRadius = 12.dp,
+                        monogramSize = 20.sp
                     )
                     Text(
                         text = UrlResolver.extractHost(tab.url),
@@ -710,15 +842,18 @@ private fun TabPreviewCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TabRowItem(
     tab: TabUiState,
     isActive: Boolean,
     island: TabIsland?,
     onSelect: () -> Unit,
+    onLongPress: () -> Unit,
     onClose: () -> Unit
 ) {
     val sabColors = LocalSabColors.current
+    val accent = if (tab.isPrivate) sabColors.privateAccent else MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -729,26 +864,21 @@ private fun TabRowItem(
                 if (isActive) MaterialTheme.colorScheme.primary else sabColors.chromeBorder.copy(alpha = 0.6f),
                 RoundedCornerShape(14.dp)
             )
-            .clickable(onClick = onSelect)
+            .combinedClickable(onClick = onSelect, onLongClick = onLongPress)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(sabColors.chromeSurfaceElevated),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = UrlResolver.extractMonogram(tab.title),
-                fontFamily = SpaceGroteskFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                color = if (tab.isPrivate) sabColors.privateAccent else MaterialTheme.colorScheme.primary
-            )
-        }
+        SiteFavicon(
+            url = tab.url,
+            title = tab.title,
+            accentColor = accent,
+            size = 34.dp,
+            iconSize = 22.dp,
+            cornerRadius = 10.dp,
+            monogramSize = 14.sp,
+            containerColor = sabColors.chromeSurfaceElevated
+        )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = tab.title,
