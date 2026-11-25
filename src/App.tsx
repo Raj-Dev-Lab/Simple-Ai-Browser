@@ -3,104 +3,129 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {BookOpen, CheckCircle2, FileCode2, FolderGit2, KeyRound, ShieldCheck} from 'lucide-react';
-
-const WORKSPACE_ITEMS = [
-  {
-    icon: FolderGit2,
-    title: 'Repository Connected',
-    detail: 'Initialized with README, Apache-2.0 License, Contributing guide, and Git ignore rules.',
-  },
-  {
-    icon: FileCode2,
-    title: 'Core Stack Ready',
-    detail: 'React 19, TypeScript, Vite 8, Tailwind CSS v4, Express, and Gemini SDK installed.',
-  },
-  {
-    icon: KeyRound,
-    title: 'Environment Template',
-    detail: 'GEMINI_API_KEY and APP_URL defined cleanly in .env.example without hardcoded secrets.',
-  },
-  {
-    icon: ShieldCheck,
-    title: 'Security Hygiene',
-    detail: 'Secret files excluded from Git and server-side key boundaries documented in SECURITY.md.',
-  },
-];
+import {useState} from 'react';
+import {ArchitectureExplorer} from './components/ArchitectureExplorer';
+import {MobileBrowserPrototype} from './components/MobileBrowserPrototype';
+import {SabLogo} from './components/SabLogo';
 
 export default function App() {
+  const [splashRunId, setSplashRunId] = useState(1);
+
+  const handleReplaySplash = () => {
+    setSplashRunId((n) => n + 1);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      <header className="border-b border-slate-800/80 bg-slate-950/90">
-        <div className="mx-auto max-w-4xl px-6 py-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-lg bg-sky-500/15 border border-sky-400/30 flex items-center justify-center text-sky-400">
-              <BookOpen className="h-5 w-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight text-white">
-                Simple AI Browser
-              </h1>
-              <p className="text-xs text-slate-400">
-                Workspace Initialized &amp; Documented
-              </p>
-            </div>
-          </div>
-          <span className="text-xs font-medium text-emerald-400 flex items-center gap-1.5">
-            <CheckCircle2 className="h-4 w-4" />
-            Ready to Build
-          </span>
+    <div className="min-h-screen bg-[#0B0D12] text-slate-100 flex flex-col">
+      {/* 3-Zone Top Bar Contract */}
+      <header className="border-b border-white/10 bg-[#0B0D12]/95 sticky top-0 z-30 backdrop-blur-md">
+        <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between gap-8">
+          <a
+            href="#top"
+            className="text-base font-bold tracking-tight text-white whitespace-nowrap shrink-0"
+          >
+            Simple AI Browser
+          </a>
+
+          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-400">
+            <a href="#workbench" className="hover:text-white transition-colors whitespace-nowrap shrink-0">
+              Opera UI
+            </a>
+            <a href="#workbench" className="hover:text-white transition-colors whitespace-nowrap shrink-0">
+              GeckoView 159+
+            </a>
+            <a href="#workbench" className="hover:text-white transition-colors whitespace-nowrap shrink-0">
+              Architecture
+            </a>
+            <a href="#specs" className="hover:text-white transition-colors whitespace-nowrap shrink-0">
+              Specs
+            </a>
+          </nav>
+
+          <button
+            type="button"
+            onClick={handleReplaySplash}
+            className="px-4 py-2 rounded-lg bg-[#FF2E4C] text-white text-xs font-semibold hover:bg-[#e62440] transition-colors whitespace-nowrap shrink-0"
+          >
+            Replay Splash
+          </button>
         </div>
       </header>
 
-      <main className="flex-1 mx-auto w-full max-w-4xl px-6 py-12 space-y-10">
-        <section className="space-y-3">
-          <h2 className="text-3xl font-semibold tracking-tight text-white">
-            Your workspace is ready.
-          </h2>
-          <p className="text-slate-300 max-w-2xl leading-relaxed">
-            Documentation, licensing, environment templates, and TypeScript tooling are all set up.
-            Tell us what features you want in your Simple AI Browser next (tabs, address bar,
-            page summaries, bookmarks, or search) and we will build them right here.
-          </p>
-        </section>
-
-        <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {WORKSPACE_ITEMS.map(({icon: Icon, title, detail}) => (
-            <div
-              key={title}
-              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-2"
-            >
-              <div className="flex items-center gap-2.5 text-sky-400">
-                <Icon className="h-4 w-4 shrink-0" />
-                <h3 className="text-sm font-medium text-white">{title}</h3>
-              </div>
-              <p className="text-sm text-slate-400 leading-relaxed">{detail}</p>
+      <main id="top" className="flex-1 mx-auto w-full max-w-7xl px-6 py-10 space-y-12">
+        {/* Hero Overview */}
+        <section className="flex flex-col lg:flex-row lg:items-center justify-between gap-8 border-b border-white/10 pb-10">
+          <div className="space-y-4 max-w-2xl">
+            <div className="text-xs font-medium text-slate-400">
+              SAB · Opera Mobile Shell · GeckoView 159+ Non-Omni · arm64-v8a · Android 10+
             </div>
-          ))}
+            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white text-balance">
+              Simple AI Browser Architecture &amp; Interactive Opera-Style UI
+            </h1>
+            <p className="text-base text-slate-300 leading-relaxed">
+              Deep teardown of Opera for Android&apos;s thumb-first navigation shell paired with a
+              decoupled Mozilla GeckoView 159+ engine adapter for 64-bit ARM devices. Test the SAB
+              splash animation, Speed Dial, Tab Islands, and bottom-bar ergonomics live on the right.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-4 shrink-0 rounded-2xl border border-white/10 bg-[#141821] p-4">
+            <SabLogo size={64} className="rounded-2xl" />
+            <div className="space-y-1">
+              <div className="text-sm font-semibold text-white">SAB Emblem</div>
+              <div className="text-xs text-slate-400 tabular-nums">
+                minSdk 29 · arm64-v8a
+              </div>
+            </div>
+          </div>
         </section>
 
-        <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-6 space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-300">
-            Quick Setup Reminder
-          </h3>
-          <ol className="list-decimal list-inside space-y-1.5 text-sm text-slate-300">
-            <li>
-              Get your API key from Google AI Studio and add it as{' '}
-              <code className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-300 font-mono text-xs">
-                GEMINI_API_KEY
-              </code>{' '}
-              in Secrets (or your local <code className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-300 font-mono text-xs">.env</code> file).
-            </li>
-            <li>
-              Read <code className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-300 font-mono text-xs">docs/SETUP.md</code> for step-by-step instructions.
-            </li>
-            <li>
-              Revoke and regenerate any GitHub token shared in chat once your initial push is complete.
-            </li>
-          </ol>
+        {/* Split Workbench: Interactive Mobile Prototype + Architecture Explorer */}
+        <section
+          id="workbench"
+          className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start"
+        >
+          <div className="lg:col-span-7 space-y-8">
+            <ArchitectureExplorer onReplaySplash={handleReplaySplash} />
+
+            <div
+              id="specs"
+              className="rounded-2xl border border-white/10 bg-[#141821] p-6 grid grid-cols-2 sm:grid-cols-4 gap-6"
+            >
+              <div className="space-y-1">
+                <div className="text-xs text-slate-400">Rendering Engine</div>
+                <div className="text-sm font-semibold text-white tabular-nums">GeckoView 159+</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-slate-400">Artifact Variant</div>
+                <div className="text-sm font-semibold text-white">Non-Omni</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-slate-400">CPU Target</div>
+                <div className="text-sm font-semibold text-white font-mono">arm64-v8a</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-slate-400">Minimum OS</div>
+                <div className="text-sm font-semibold text-white tabular-nums">Android 10 (API 29)</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-5 lg:sticky lg:top-24">
+            <MobileBrowserPrototype
+              splashRunId={splashRunId}
+              onReplaySplash={handleReplaySplash}
+            />
+          </div>
         </section>
       </main>
+
+      <footer className="border-t border-white/10 py-6 mt-8">
+        <div className="mx-auto max-w-7xl px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400">
+          <span>Simple AI Browser (SAB) · Apache-2.0 Open Source</span>
+          <span>Docs: docs/ARCHITECTURE.md · docs/GECKOVIEW_ENGINE.md · docs/OPERA_UI_ANALYSIS.md</span>
+        </div>
+      </footer>
     </div>
   );
 }

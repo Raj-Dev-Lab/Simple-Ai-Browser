@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "SAB Page Bridge",
+  "version": "0.1.0",
+  "description": "Internal GeckoView bridge for page text extraction, reader view, and dark mode.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "sab-bridge@rajdevlab.com"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["geckoViewAddons", "nativeMessaging", "activeTab"]
+}

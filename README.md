@@ -6,10 +6,11 @@ A clean, fast AI-powered web browsing and research workspace built with React, T
 
 ## Workspace Status
 
-This repository is initialized with the core application scaffold and project documentation:
+This repository includes:
 
-- **Frontend:** React 19, TypeScript, Vite 8, Tailwind CSS v4, Lucide Icons, Motion
-- **Backend / SDK Ready:** Express 4 & `@google/genai` SDK installed for server-side API routes
+- **Architecture & Research Blueprint:** Deep teardown of Opera Mobile UI (`docs/OPERA_UI_ANALYSIS.md`), GeckoView 159+ non-omni `arm64-v8a` Android 10+ setup (`docs/GECKOVIEW_ENGINE.md`), and the decoupled engine-swap spec (`docs/ARCHITECTURE.md`)
+- **Android Engine-Swap Starter (`android/`):** Gradle catalog (`geckoview-arm64-v8a:159+`), `BrowserEngine` contracts, `GeckoEngineAdapter`, and `sab-bridge` WebExtension
+- **Interactive Web Showcase & UI Prototype (`src/`):** Live SAB logo, splash animation, Opera-style mobile UI prototype, and interactive architecture explorer
 - **Documentation & Governance:** `README.md`, `docs/SETUP.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` (Apache-2.0)
 
 ---
@@ -83,14 +84,26 @@ Open `http://localhost:3000` in your browser.
 
 ```text
 Simple-Ai-Browser/
+├── android/
+│   ├── app/build.gradle.kts              # Android 10+ (minSdk 29) & arm64-v8a config
+│   ├── core-browser/                     # Engine-agnostic BrowserEngine & TabSession contracts
+│   ├── engine-gecko/                     # GeckoView 159+ non-omni adapter & sab-bridge
+│   ├── gradle/libs.versions.toml         # Pinned GeckoView 159+ Maven coordinates
+│   └── settings.gradle.kts               # Mozilla Maven repository setup
 ├── docs/
-│   └── SETUP.md          # Beginner-friendly API key & setup guide
+│   ├── ARCHITECTURE.md                   # 5-layer Opera -> SAB engine-swap blueprint
+│   ├── GECKOVIEW_ENGINE.md               # GeckoView 159+ non-omni arm64-v8a guide
+│   ├── OPERA_UI_ANALYSIS.md              # Opera Mobile UI & thumb-zone teardown
+│   └── SETUP.md                          # Beginner-friendly API key & setup guide
 ├── src/
-│   ├── App.tsx           # Root application component
-│   ├── index.css         # Tailwind CSS entry point
-│   └── main.tsx          # React DOM mount
-├── .env.example          # Environment variable template (safe to commit)
-├── .gitignore            # Excludes .env, node_modules, dist, logs
+│   ├── assets/images/                    # Generated SAB app logo asset
+│   ├── components/                       # SplashOverlay, SabLogo, Prototype, Explorer
+│   ├── data/                             # Architecture & Speed Dial blueprint data
+│   ├── App.tsx                           # Root application component
+│   ├── index.css                         # Tailwind CSS entry point
+│   └── main.tsx                          # React DOM mount
+├── .env.example                          # Environment variable template (safe to commit)
+├── .gitignore                            # Excludes .env, node_modules, dist, logs
 ├── CONTRIBUTING.md       # Contribution guidelines
 ├── index.html            # HTML entry & OpenGraph metadata
 ├── LICENSE               # Apache License 2.0
