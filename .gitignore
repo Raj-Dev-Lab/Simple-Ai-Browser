@@ -17,9 +17,15 @@
 .cxx
 local.properties
 .env
-debug.keystore
+# debug.keystore is COMMITTED on purpose: it is the single shared debug signing key (standard
+# Android debug password/alias), so debug builds from every machine and from CI always update
+# in place instead of failing with "signatures do not match". Only RELEASE keys are secret.
 debug.keystore.base64
 my-upload-key.jks
+*.jks
+*.keystore
+!debug.keystore
+keystore/*.jks
 *-debug.log
 
 # Private Owner/Agent Project Memory Vault (NEVER pushed to public GitHub)
