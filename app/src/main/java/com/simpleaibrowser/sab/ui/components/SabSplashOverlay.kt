@@ -252,7 +252,7 @@ fun SabSplashOverlay(
                         )
                         Text(
                             text = if (engineInfo.isGeckoViewActive) {
-                                "GECKOVIEW 161 • ARM64 ENGINE"
+                                "GECKOVIEW 161 • ${engineInfo.abi.uppercase()} ENGINE"
                             } else {
                                 "GECKOVIEW 161 ARCH • READY"
                             },

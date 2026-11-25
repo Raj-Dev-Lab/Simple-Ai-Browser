@@ -16,8 +16,12 @@ android {
     applicationId = "com.simpleaibrowser.sab"
     minSdk = 29
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.1.0"
+    versionCode = 3
+    versionName = "1.1.1"
+
+    ndk {
+      abiFilters += listOf("arm64-v8a", "x86_64")
+    }
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -111,8 +115,8 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
-  // Mozilla GeckoView 161 (159+, non-omni, arm64-v8a, Android 10+)
-  implementation(libs.mozilla.geckoview.arm64)
+  // Mozilla GeckoView 161 (159+, non-omni, arm64-v8a + x86_64, Android 10+)
+  implementation(libs.mozilla.geckoview)
   // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   // implementation(libs.firebase.firestore)

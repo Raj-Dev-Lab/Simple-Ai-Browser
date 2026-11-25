@@ -59,7 +59,7 @@ class GeckoEngineAdapter(
             abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a",
             isGeckoViewActive = true,
             builtInExtensionReady = extensionReady.get(),
-            notes = "Pre-compiled GeckoView 161+ arm64-v8a with Enhanced Tracking Protection & sab-bridge WebExtension"
+            notes = "Pre-compiled GeckoView 161+ (non-omni, arm64-v8a & x86_64) with Enhanced Tracking Protection & sab-bridge WebExtension"
         )
 
     override fun createRenderView(context: Context): View {

@@ -10,14 +10,16 @@ import com.simpleaibrowser.sab.engine.gecko.GeckoEngineAdapter
 private const val TAG = "SabEngineFactory"
 
 /**
- * Instantiates the Mozilla GeckoView 161.0 (non-omni, arm64-v8a) engine first.
- * Only if the runtime host physically lacks ARM64 execution (e.g., an x86_64
- * preview container without ARM translation) does it gracefully switch to
- * CompatWebViewEngine so the Opera-inspired UI shell remains fully operational.
+ * Instantiates Mozilla GeckoView 161.0 (non-omni) natively on both
+ * arm64-v8a (Android 10+ devices) and x86_64 (emulators).
+ * Falls back to CompatWebViewEngine only if an unsupported ABI or native
+ * runtime initialization error occurs.
  */
 object BrowserEngineFactory {
     @Volatile
     private var cachedEngine: BrowserEngine? = null
+
+    private val supportedGeckoAbis = setOf("arm64-v8a", "x86_64")
 
     fun getOrCreate(context: Context): BrowserEngine {
         return cachedEngine ?: synchronized(this) {
@@ -26,9 +28,11 @@ object BrowserEngineFactory {
     }
 
     private fun createInternal(appContext: Context): BrowserEngine {
-        val supportsArm64 = Build.SUPPORTED_ABIS.any { it.equals("arm64-v8a", ignoreCase = true) }
-        if (!supportsArm64) {
-            Log.w(TAG, "Host ABIs ${Build.SUPPORTED_ABIS.joinToString()} do not list arm64-v8a; using CompatWebViewEngine.")
+        val hasSupportedAbi = Build.SUPPORTED_ABIS.any { abi ->
+            supportedGeckoAbis.any { it.equals(abi, ignoreCase = true) }
+        }
+        if (!hasSupportedAbi) {
+            Log.w(TAG, "Host ABIs ${Build.SUPPORTED_ABIS.joinToString()} not in $supportedGeckoAbis; using CompatWebViewEngine.")
             return CompatWebViewEngine(
                 context = appContext,
                 fallbackReason = "Host ABIs: ${Build.SUPPORTED_ABIS.joinToString()}"

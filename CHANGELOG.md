@@ -3,6 +3,15 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.1] - 2026-11-25
+
+### Added
+- **Dual 64-Bit ABI Support (`arm64-v8a` + `x86_64`)**: Switched to pre-compiled Mozilla GeckoView 161.0 non-omni filtered cleanly to `arm64-v8a` (Android 10+ devices) and `x86_64` (Android emulators) so native GeckoView runs directly on both phones and streaming emulators.
+- **Automated GitHub Releases**: CI now automatically publishes downloadable `sab-debug-arm64-x86_64.apk` binaries on every `v*` tag release.
+
+### Fixed
+- **Android CI Workflow**: Upgraded GitHub Actions runner to JDK 21, Gradle `9.3.1`, and Android SDK `36.1` to match AGP 9.1.1 and `foojay-resolver-convention:1.0.0`.
+
 ## [1.1.0] - 2026-11-25
 
 ### Added
