@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -13,7 +14,9 @@ import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.core.browser.SearchEngine
 import com.simpleaibrowser.sab.core.browser.ThemePreset
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 
 private val Context.sabDataStore: DataStore<Preferences> by preferencesDataStore(name = "sab_preferences")
 
@@ -27,7 +30,9 @@ data class BrowserSettings(
     val restoreTabsOnStart: Boolean = true,
     val defaultTextZoom: Int = 100,
     val totalBlockedTrackers: Long = 0L,
-    val showWallpaperOnStart: Boolean = true
+    val showWallpaperOnStart: Boolean = true,
+    val autoUpdateExtensions: Boolean = true,
+    val lastExtensionUpdateCheckAt: Long = 0L
 )
 
 class BrowserPreferences(private val context: Context) {
@@ -42,24 +47,36 @@ class BrowserPreferences(private val context: Context) {
         val DEFAULT_TEXT_ZOOM = intPreferencesKey("default_text_zoom")
         val TOTAL_BLOCKED = longPreferencesKey("total_blocked_trackers")
         val SHOW_WALLPAPER = booleanPreferencesKey("show_wallpaper_on_start")
+        val AUTO_UPDATE_EXTENSIONS = booleanPreferencesKey("auto_update_extensions")
+        val LAST_EXTENSION_CHECK = longPreferencesKey("last_extension_update_check_at")
     }
 
-    val settingsFlow: Flow<BrowserSettings> = context.sabDataStore.data.map { prefs ->
-        BrowserSettings(
-            adBlockEnabled = prefs[Keys.AD_BLOCK] ?: true,
-            httpsOnlyEnabled = prefs[Keys.HTTPS_ONLY] ?: true,
-            forceDarkDefault = prefs[Keys.FORCE_DARK] ?: false,
-            searchEngine = SearchEngine.fromId(prefs[Keys.SEARCH_ENGINE] ?: SearchEngine.DUCKDUCKGO.id),
-            themePreset = ThemePreset.fromId(prefs[Keys.THEME_PRESET] ?: ThemePreset.OBSIDIAN_CRIMSON.id),
-            addressBarPosition = AddressBarPosition.fromId(
-                prefs[Keys.ADDRESS_BAR_POSITION] ?: AddressBarPosition.TOP.id
-            ),
-            restoreTabsOnStart = prefs[Keys.RESTORE_TABS] ?: true,
-            defaultTextZoom = (prefs[Keys.DEFAULT_TEXT_ZOOM] ?: 100).coerceIn(75, 160),
-            totalBlockedTrackers = prefs[Keys.TOTAL_BLOCKED] ?: 0L,
-            showWallpaperOnStart = prefs[Keys.SHOW_WALLPAPER] ?: true
-        )
-    }
+    val settingsFlow: Flow<BrowserSettings> = context.sabDataStore.data
+        .catch { exception ->
+            if (exception is IOException) {
+                emit(emptyPreferences())
+            } else {
+                throw exception
+            }
+        }
+        .map { prefs ->
+            BrowserSettings(
+                adBlockEnabled = prefs[Keys.AD_BLOCK] ?: true,
+                httpsOnlyEnabled = prefs[Keys.HTTPS_ONLY] ?: true,
+                forceDarkDefault = prefs[Keys.FORCE_DARK] ?: false,
+                searchEngine = SearchEngine.fromId(prefs[Keys.SEARCH_ENGINE] ?: SearchEngine.DUCKDUCKGO.id),
+                themePreset = ThemePreset.fromId(prefs[Keys.THEME_PRESET] ?: ThemePreset.OBSIDIAN_CRIMSON.id),
+                addressBarPosition = AddressBarPosition.fromId(
+                    prefs[Keys.ADDRESS_BAR_POSITION] ?: AddressBarPosition.TOP.id
+                ),
+                restoreTabsOnStart = prefs[Keys.RESTORE_TABS] ?: true,
+                defaultTextZoom = (prefs[Keys.DEFAULT_TEXT_ZOOM] ?: 100).coerceIn(75, 160),
+                totalBlockedTrackers = prefs[Keys.TOTAL_BLOCKED] ?: 0L,
+                showWallpaperOnStart = prefs[Keys.SHOW_WALLPAPER] ?: true,
+                autoUpdateExtensions = prefs[Keys.AUTO_UPDATE_EXTENSIONS] ?: true,
+                lastExtensionUpdateCheckAt = prefs[Keys.LAST_EXTENSION_CHECK] ?: 0L
+            )
+        }
 
     suspend fun setAdBlockEnabled(enabled: Boolean) {
         context.sabDataStore.edit { it[Keys.AD_BLOCK] = enabled }
@@ -97,7 +114,16 @@ class BrowserPreferences(private val context: Context) {
         context.sabDataStore.edit { it[Keys.SHOW_WALLPAPER] = enabled }
     }
 
+    suspend fun setAutoUpdateExtensions(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.AUTO_UPDATE_EXTENSIONS] = enabled }
+    }
+
+    suspend fun setLastExtensionUpdateCheckAt(timestamp: Long) {
+        context.sabDataStore.edit { it[Keys.LAST_EXTENSION_CHECK] = timestamp }
+    }
+
     suspend fun incrementBlockedTrackers(delta: Long = 1L) {
+        if (delta <= 0L) return
         context.sabDataStore.edit { prefs ->
             val current = prefs[Keys.TOTAL_BLOCKED] ?: 0L
             prefs[Keys.TOTAL_BLOCKED] = current + delta

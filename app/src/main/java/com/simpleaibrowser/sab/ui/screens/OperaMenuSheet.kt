@@ -68,12 +68,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.ui.graphics.asImageBitmap
 import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.ExtensionActionState
 import com.simpleaibrowser.sab.core.browser.SecurityState
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.UrlResolver
-import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.data.BrowserSettings
 import com.simpleaibrowser.sab.ui.theme.JetBrainsMonoFamily
 import com.simpleaibrowser.sab.ui.theme.LocalSabColors
@@ -84,6 +89,9 @@ fun OperaMenuBottomSheet(
     activeTab: TabUiState,
     isBookmarked: Boolean,
     settings: BrowserSettings,
+    extensionActions: List<ExtensionActionState>,
+    installedExtensionsCount: Int,
+    extensionUpdatesCount: Int,
     onDismiss: () -> Unit,
     onForward: () -> Unit,
     onToggleBookmark: () -> Unit,
@@ -95,6 +103,8 @@ fun OperaMenuBottomSheet(
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenDownloads: () -> Unit,
+    onOpenExtensions: () -> Unit,
+    onTriggerExtensionAction: (String) -> Unit,
     onPinToSpeedDial: () -> Unit,
     onToggleAdBlock: (Boolean) -> Unit,
     onToggleDesktop: () -> Unit,
@@ -162,6 +172,82 @@ fun OperaMenuBottomSheet(
                     enabled = !activeTab.isStartPage,
                     onClick = onFindInPage
                 )
+            }
+
+            // Active Extension Toolbar Actions Strip
+            if (extensionActions.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(sabColors.chromeSurfaceElevated)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "EXTENSION ACTIONS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = sabColors.subtleText,
+                        letterSpacing = 1.1.sp
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        extensionActions.forEach { act ->
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(sabColors.chromeBar)
+                                    .clickable(enabled = act.enabled) {
+                                        onDismiss()
+                                        onTriggerExtensionAction(act.extensionId)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val bmp = act.iconBitmap
+                                if (bmp != null) {
+                                    Image(
+                                        bitmap = bmp.asImageBitmap(),
+                                        contentDescription = act.title,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.Extension,
+                                        contentDescription = act.title,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Text(
+                                    text = act.extensionName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1
+                                )
+                                if (!act.badgeText.isNullOrBlank()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.22f))
+                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = act.badgeText,
+                                            fontFamily = JetBrainsMonoFamily,
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Feature Switches Card
@@ -302,6 +388,18 @@ fun OperaMenuBottomSheet(
                     onClick = onOpenDownloads,
                     testTag = "menu_downloads_row"
                 )
+                val extLabel = when {
+                    extensionUpdatesCount > 0 -> "Extensions ($installedExtensionsCount • $extensionUpdatesCount update)"
+                    installedExtensionsCount > 0 -> "Extensions & Store ($installedExtensionsCount)"
+                    else -> "Extensions & Store"
+                }
+                MenuActionRow(
+                    icon = Icons.Filled.Extension,
+                    title = extLabel,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    onClick = onOpenExtensions,
+                    testTag = "menu_extensions_row"
+                )
                 MenuActionRow(
                     icon = Icons.Filled.Settings,
                     title = "Browser Settings & Engine Info",
@@ -416,141 +514,6 @@ fun LinkContextBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(6.dp))
-        }
-    }
-}
-
-@Composable
-fun WebPromptDialog(
-    prompt: WebPromptRequest,
-    onDismissComplete: () -> Unit
-) {
-    when (prompt) {
-        is WebPromptRequest.Alert -> {
-            AlertDialog(
-                onDismissRequest = {
-                    prompt.onDismiss()
-                    onDismissComplete()
-                },
-                title = { Text(prompt.title.ifBlank { prompt.originHost }) },
-                text = { Text(prompt.message) },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            prompt.onDismiss()
-                            onDismissComplete()
-                        }
-                    ) {
-                        Text("OK")
-                    }
-                }
-            )
-        }
-
-        is WebPromptRequest.Confirm -> {
-            AlertDialog(
-                onDismissRequest = {
-                    prompt.onResult(false)
-                    onDismissComplete()
-                },
-                title = { Text(prompt.title.ifBlank { prompt.originHost }) },
-                text = { Text(prompt.message) },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            prompt.onResult(true)
-                            onDismissComplete()
-                        }
-                    ) {
-                        Text("Confirm")
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            prompt.onResult(false)
-                            onDismissComplete()
-                        }
-                    ) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
-
-        is WebPromptRequest.TextInput -> {
-            var inputText by remember(prompt.id) { mutableStateOf(prompt.defaultValue) }
-            AlertDialog(
-                onDismissRequest = {
-                    prompt.onResult(null)
-                    onDismissComplete()
-                },
-                title = { Text(prompt.title.ifBlank { prompt.originHost }) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (prompt.message.isNotBlank()) {
-                            Text(prompt.message)
-                        }
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            prompt.onResult(inputText)
-                            onDismissComplete()
-                        }
-                    ) {
-                        Text("OK")
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            prompt.onResult(null)
-                            onDismissComplete()
-                        }
-                    ) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
-
-        is WebPromptRequest.SitePermission -> {
-            AlertDialog(
-                onDismissRequest = {
-                    prompt.onResult(false)
-                    onDismissComplete()
-                },
-                title = { Text("Site Permission") },
-                text = { Text("${prompt.originHost} wants to ${prompt.permissionLabel}.") },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            prompt.onResult(true)
-                            onDismissComplete()
-                        }
-                    ) {
-                        Text("Allow")
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            prompt.onResult(false)
-                            onDismissComplete()
-                        }
-                    ) {
-                        Text("Block")
-                    }
-                }
-            )
         }
     }
 }

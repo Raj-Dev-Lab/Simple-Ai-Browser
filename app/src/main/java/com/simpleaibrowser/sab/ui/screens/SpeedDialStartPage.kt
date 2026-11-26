@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -81,6 +82,7 @@ fun SpeedDialStartPage(
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenDownloads: () -> Unit,
+    onOpenExtensions: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -354,47 +356,61 @@ fun SpeedDialStartPage(
                 }
             }
 
-            // Opera-style Quick Access Utility Row
+            // Opera-style Quick Access Utility Grid (2 rows x 3 chips)
             item(key = "quick_actions") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StartQuickActionChip(
-                        icon = Icons.Filled.VisibilityOff,
-                        label = "Private",
-                        accent = sabColors.privateAccent,
-                        onClick = onNewPrivateTab,
-                        modifier = Modifier.weight(1f).testTag("quick_private_btn")
-                    )
-                    StartQuickActionChip(
-                        icon = Icons.Filled.Bookmark,
-                        label = "Saved",
-                        accent = MaterialTheme.colorScheme.primary,
-                        onClick = onOpenBookmarks,
-                        modifier = Modifier.weight(1f).testTag("quick_bookmarks_btn")
-                    )
-                    StartQuickActionChip(
-                        icon = Icons.Filled.History,
-                        label = "History",
-                        accent = MaterialTheme.colorScheme.secondary,
-                        onClick = onOpenHistory,
-                        modifier = Modifier.weight(1f).testTag("quick_history_btn")
-                    )
-                    StartQuickActionChip(
-                        icon = Icons.Filled.Download,
-                        label = "Files",
-                        accent = sabColors.shieldGreen,
-                        onClick = onOpenDownloads,
-                        modifier = Modifier.weight(1f).testTag("quick_downloads_btn")
-                    )
-                    StartQuickActionChip(
-                        icon = Icons.Filled.Settings,
-                        label = "Config",
-                        accent = sabColors.subtleText,
-                        onClick = onOpenSettings,
-                        modifier = Modifier.weight(1f).testTag("quick_settings_btn")
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        StartQuickActionChip(
+                            icon = Icons.Filled.VisibilityOff,
+                            label = "Private",
+                            accent = sabColors.privateAccent,
+                            onClick = onNewPrivateTab,
+                            modifier = Modifier.weight(1f).testTag("quick_private_btn")
+                        )
+                        StartQuickActionChip(
+                            icon = Icons.Filled.Bookmark,
+                            label = "Saved",
+                            accent = MaterialTheme.colorScheme.primary,
+                            onClick = onOpenBookmarks,
+                            modifier = Modifier.weight(1f).testTag("quick_bookmarks_btn")
+                        )
+                        StartQuickActionChip(
+                            icon = Icons.Filled.History,
+                            label = "History",
+                            accent = MaterialTheme.colorScheme.secondary,
+                            onClick = onOpenHistory,
+                            modifier = Modifier.weight(1f).testTag("quick_history_btn")
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        StartQuickActionChip(
+                            icon = Icons.Filled.Extension,
+                            label = "Extensions",
+                            accent = MaterialTheme.colorScheme.secondary,
+                            onClick = onOpenExtensions,
+                            modifier = Modifier.weight(1f).testTag("quick_extensions_btn")
+                        )
+                        StartQuickActionChip(
+                            icon = Icons.Filled.Download,
+                            label = "Downloads",
+                            accent = sabColors.shieldGreen,
+                            onClick = onOpenDownloads,
+                            modifier = Modifier.weight(1f).testTag("quick_downloads_btn")
+                        )
+                        StartQuickActionChip(
+                            icon = Icons.Filled.Settings,
+                            label = "Settings",
+                            accent = sabColors.subtleText,
+                            onClick = onOpenSettings,
+                            modifier = Modifier.weight(1f).testTag("quick_settings_btn")
+                        )
+                    }
                 }
             }
 

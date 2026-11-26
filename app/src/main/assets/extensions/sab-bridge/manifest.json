@@ -1,14 +1,15 @@
 {
   "manifest_version": 2,
   "name": "SAB Page Bridge",
-  "version": "1.1.0",
-  "description": "Built-in GeckoView content bridge for Force Dark CSS, Reader Focus, Find-in-Page helpers, and future AI context snapshots.",
+  "version": "1.2.0",
+  "description": "Built-in GeckoView content bridge for Force Dark CSS, Reader Focus, Live Page Zoom, and DOM context snapshots.",
   "browser_specific_settings": {
     "gecko": {
       "id": "sab-bridge@simpleaibrowser.com"
     }
   },
   "permissions": [
+    "geckoViewAddons",
     "nativeMessaging",
     "nativeMessagingFromContent",
     "<all_urls>"
@@ -17,7 +18,8 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_start",
+      "all_frames": false
     }
   ]
 }

@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
         )
 
-        val incomingUrl = extractIncomingUrl(intent)
+        val incomingUrl = consumeIncomingUrl(intent)
 
         setContent {
             SabBrowserApp(
@@ -35,14 +35,17 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        extractIncomingUrl(intent)?.let { url ->
+        consumeIncomingUrl(intent)?.let { url ->
             browserViewModel.handleIncomingExternalUri(url)
         }
     }
 
-    private fun extractIncomingUrl(intent: Intent?): String? {
+    private fun consumeIncomingUrl(intent: Intent?): String? {
         if (intent?.action == Intent.ACTION_VIEW) {
-            return intent.dataString
+            val uri = intent.dataString
+            intent.action = null
+            intent.data = null
+            return uri
         }
         return null
     }

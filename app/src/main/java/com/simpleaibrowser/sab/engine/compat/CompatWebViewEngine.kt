@@ -98,6 +98,10 @@ class CompatWebViewEngine(
         CookieManager.getInstance().flush()
         WebStorage.getInstance().deleteAllData()
     }
+
+    override fun clearHistoryAndCachesOnly() {
+        runCatching { WebView(context).clearCache(true) }
+    }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -225,13 +229,15 @@ private class CompatWebViewTabSession(
                 result: JsResult?
             ): Boolean {
                 val host = UrlResolver.extractHost(url ?: _state.value.url)
+                val done = AtomicBoolean(false)
                 callbacks.onPromptRequested(
                     WebPromptRequest.Alert(
                         id = UUID.randomUUID().toString(),
                         originHost = host,
+                        tabId = this@CompatWebViewTabSession.id,
                         title = host,
                         message = message.orEmpty(),
-                        onDismiss = { result?.confirm() }
+                        onDismiss = { if (done.compareAndSet(false, true)) result?.confirm() }
                     )
                 )
                 return true
@@ -244,13 +250,19 @@ private class CompatWebViewTabSession(
                 result: JsResult?
             ): Boolean {
                 val host = UrlResolver.extractHost(url ?: _state.value.url)
+                val done = AtomicBoolean(false)
                 callbacks.onPromptRequested(
                     WebPromptRequest.Confirm(
                         id = UUID.randomUUID().toString(),
                         originHost = host,
+                        tabId = this@CompatWebViewTabSession.id,
                         title = host,
                         message = message.orEmpty(),
-                        onResult = { ok -> if (ok) result?.confirm() else result?.cancel() }
+                        onResult = { ok ->
+                            if (done.compareAndSet(false, true)) {
+                                if (ok) result?.confirm() else result?.cancel()
+                            }
+                        }
                     )
                 )
                 return true
@@ -264,14 +276,20 @@ private class CompatWebViewTabSession(
                 result: JsPromptResult?
             ): Boolean {
                 val host = UrlResolver.extractHost(url ?: _state.value.url)
+                val done = AtomicBoolean(false)
                 callbacks.onPromptRequested(
                     WebPromptRequest.TextInput(
                         id = UUID.randomUUID().toString(),
                         originHost = host,
+                        tabId = this@CompatWebViewTabSession.id,
                         title = host,
                         message = message.orEmpty(),
                         defaultValue = defaultValue.orEmpty(),
-                        onResult = { value -> if (value != null) result?.confirm(value) else result?.cancel() }
+                        onResult = { value ->
+                            if (done.compareAndSet(false, true)) {
+                                if (value != null) result?.confirm(value) else result?.cancel()
+                            }
+                        }
                     )
                 )
                 return true
@@ -282,12 +300,20 @@ private class CompatWebViewTabSession(
     private fun applyInjectedStyles() {
         val current = _state.value
         val darkJs = if (current.forceDarkMode) {
-            """(function(){var s=document.getElementById('sab-dark')||document.createElement('style');s.id='sab-dark';s.textContent='html{filter:invert(0.92) hue-rotate(180deg)!important;background:#0b0d14!important;}img,video,canvas,svg{filter:invert(1) hue-rotate(180deg)!important;}';document.head.appendChild(s);})();"""
+            """(function(){
+              var bg=getComputedStyle(document.documentElement).backgroundColor;
+              var m=bg&&bg.match(/\d+/g);
+              if(m&&m.length>=3&&((0.2126*m[0]+0.7152*m[1]+0.0722*m[2])<105)){return;}
+              var s=document.getElementById('sab-dark')||document.createElement('style');
+              s.id='sab-dark';
+              s.textContent='html{filter:invert(0.92) hue-rotate(180deg)!important;background:#0e1118!important;}img,video,canvas,svg,picture,iframe{filter:invert(1) hue-rotate(180deg)!important;}';
+              (document.head||document.documentElement).appendChild(s);
+            })();"""
         } else {
             """(function(){var s=document.getElementById('sab-dark');if(s)s.remove();})();"""
         }
         val readerJs = if (current.readerMode) {
-            """(function(){var s=document.getElementById('sab-reader')||document.createElement('style');s.id='sab-reader';s.textContent='body{max-width:720px!important;margin:0 auto!important;padding:18px!important;line-height:1.7!important;font-size:18px!important;}aside,nav,footer{display:none!important;}';document.head.appendChild(s);})();"""
+            """(function(){var s=document.getElementById('sab-reader')||document.createElement('style');s.id='sab-reader';s.textContent='body{max-width:720px!important;margin:0 auto!important;padding:18px!important;line-height:1.72!important;font-size:18px!important;}aside,nav,footer,[role="banner"],[role="navigation"]{display:none!important;}';(document.head||document.documentElement).appendChild(s);})();"""
         } else {
             """(function(){var s=document.getElementById('sab-reader');if(s)s.remove();})();"""
         }

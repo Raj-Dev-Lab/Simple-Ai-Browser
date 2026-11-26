@@ -1,6 +1,7 @@
 package com.simpleaibrowser.sab.core.browser
 
 import android.content.Context
+import android.net.Uri
 import android.view.View
 import kotlinx.coroutines.flow.StateFlow
 
@@ -164,7 +165,8 @@ data class DownloadRequest(
     val url: String,
     val fileName: String,
     val mimeType: String?,
-    val contentLength: Long = -1L
+    val contentLength: Long = -1L,
+    val localUri: String? = null
 )
 
 data class ContextMenuTarget(
@@ -174,41 +176,152 @@ data class ContextMenuTarget(
     val title: String?
 )
 
+data class PromptChoiceOption(
+    val id: String,
+    val label: String,
+    val selected: Boolean,
+    val disabled: Boolean,
+    val isGroupHeader: Boolean = false,
+    val isSeparator: Boolean = false,
+    val indented: Boolean = false
+)
+
 sealed interface WebPromptRequest {
     val id: String
     val originHost: String
+    val tabId: String
+
+    fun cancelSilently()
 
     data class Alert(
         override val id: String,
         override val originHost: String,
+        override val tabId: String = "",
         val title: String,
         val message: String,
         val onDismiss: () -> Unit
-    ) : WebPromptRequest
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onDismiss()
+    }
 
     data class Confirm(
         override val id: String,
         override val originHost: String,
+        override val tabId: String = "",
         val title: String,
         val message: String,
+        val confirmLabel: String = "Confirm",
+        val cancelLabel: String = "Cancel",
         val onResult: (confirmed: Boolean) -> Unit
-    ) : WebPromptRequest
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(false)
+    }
 
     data class TextInput(
         override val id: String,
         override val originHost: String,
+        override val tabId: String = "",
         val title: String,
         val message: String,
         val defaultValue: String,
         val onResult: (value: String?) -> Unit
-    ) : WebPromptRequest
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(null)
+    }
 
     data class SitePermission(
         override val id: String,
         override val originHost: String,
+        override val tabId: String = "",
         val permissionLabel: String,
         val onResult: (granted: Boolean) -> Unit
-    ) : WebPromptRequest
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(false)
+    }
+
+    data class HttpAuth(
+        override val id: String,
+        override val originHost: String,
+        override val tabId: String = "",
+        val title: String,
+        val message: String,
+        val usernameOnly: Boolean,
+        val onResult: (username: String?, password: String?) -> Unit
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(null, null)
+    }
+
+    data class ChoiceSelect(
+        override val id: String,
+        override val originHost: String,
+        override val tabId: String = "",
+        val title: String,
+        val message: String,
+        val multiple: Boolean,
+        val options: List<PromptChoiceOption>,
+        val onResult: (selectedIds: List<String>?) -> Unit
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(null)
+    }
+
+    data class ColorPick(
+        override val id: String,
+        override val originHost: String,
+        override val tabId: String = "",
+        val title: String,
+        val defaultValue: String,
+        val predefinedColors: List<String>,
+        val onResult: (hexColor: String?) -> Unit
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(null)
+    }
+
+    data class DateTimePick(
+        override val id: String,
+        override val originHost: String,
+        override val tabId: String = "",
+        val title: String,
+        val modeHint: String,
+        val defaultValue: String,
+        val onResult: (value: String?) -> Unit
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(null)
+    }
+
+    data class FileUpload(
+        override val id: String,
+        override val originHost: String,
+        override val tabId: String = "",
+        val title: String,
+        val mimeTypes: List<String>,
+        val allowMultiple: Boolean,
+        val onResult: (uris: List<Uri>?) -> Unit
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(null)
+    }
+
+    data class AndroidPermissions(
+        override val id: String,
+        override val originHost: String,
+        override val tabId: String = "",
+        val permissions: List<String>,
+        val onResult: (granted: Boolean) -> Unit
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(false)
+    }
+
+    data class ExtensionInstall(
+        override val id: String,
+        override val originHost: String = "Extension Store",
+        override val tabId: String = "",
+        val extensionName: String,
+        val version: String,
+        val permissions: List<String>,
+        val origins: List<String>,
+        val onResult: (granted: Boolean, allowPrivate: Boolean) -> Unit
+    ) : WebPromptRequest {
+        override fun cancelSilently() = onResult(false, false)
+    }
 }
 
 data class EngineInfo(
@@ -228,7 +341,9 @@ data class SessionCallbacks(
     val onContextMenu: (ContextMenuTarget) -> Unit = {},
     val onFullScreenChanged: (Boolean) -> Unit = {},
     val onPromptRequested: (WebPromptRequest) -> Unit = {},
-    val onFindResult: (FindInPageResult) -> Unit = {}
+    val onFindResult: (FindInPageResult) -> Unit = {},
+    val onShareRequested: (title: String, textOrUrl: String) -> Unit = { _, _ -> },
+    val onSessionRecovered: (tabId: String, message: String) -> Unit = { _, _ -> }
 )
 
 /**
@@ -267,6 +382,7 @@ interface BrowserTabSession {
  */
 interface BrowserEngine {
     val engineInfo: EngineInfo
+    val extensionsController: BrowserExtensionsController? get() = null
 
     fun createRenderView(context: Context): View
 
@@ -276,7 +392,9 @@ interface BrowserEngine {
         callbacks: SessionCallbacks
     ): BrowserTabSession
 
+    fun setActiveSession(session: BrowserTabSession?) {}
     fun setAdBlockEnabled(enabled: Boolean)
     fun setPreferredDarkScheme(isDark: Boolean)
     fun clearBrowsingData()
+    fun clearHistoryAndCachesOnly() { clearBrowsingData() }
 }

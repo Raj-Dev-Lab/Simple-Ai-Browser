@@ -3,6 +3,19 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.0] - 2026-11-26
+
+### Added
+- **Extension Store (Mozilla Add-ons + GitHub WebExtensions)**: Added a full 3-tab Extension Manager & Store (`Mozilla Store`, `GitHub`, `Installed`) powered by Mozilla's AMO v5 API, GitHub repository/release `.xpi` discovery, and direct `.xpi` / `owner/repo` installation via GeckoView `WebExtensionController`.
+- **Automatic & On-Demand Extension Updates**: Added startup auto-update checks (every 12 hours when enabled), native Mozilla update support (`WebExtensionController.update`), GitHub release asset version comparison, per-extension Auto-Update toggles, and a global setting in Settings.
+- **Extension Popups, Options & Action Strip**: Added live browser-action toolbar strip in the Opera Menu with badge indicators, in-app `GeckoView` popup sheets (`ExtensionPopupSheet`), extension permission approval dialogs (`Allow` + `Allow in Private Tabs`), and options page navigation.
+- **Full GeckoView Web Prompts, Permissions & File Pickers**: Added native Material 3 dialogs for HTTP Basic/Digest Auth, single/multi `<select>` choice lists, HTML `<input type="color">`, date/time pickers, page Share targets, Android `CAMERA`/`RECORD_AUDIO` runtime permission requests, and SAF file uploads (`OpenDocument` / `OpenMultipleDocuments`).
+
+### Fixed
+- **Zoom %, Reading Mode & Force Dark (`sab-bridge` 1.2.0)**: Added `"geckoViewAddons"` permission in `manifest.json`, switched `content.js` to reconnectable `connectNative("sabBridge")` ports with single atomic `SYNC_MODES` messages, added DOM-luminance-aware Force Dark (`isPageNativelyDark()`), full-page CSS zoom scaling (`75%–160%`), SPA `MutationObserver` re-application, and Readability-scored Reader Mode layout (`#sab-reader-overlay`).
+- **GeckoView Extensions Runtime & Session Stability**: Enabled `extensionsWebAPIEnabled(true)` and `extensionsProcessEnabled(true)`, wired `setTabActive()` switching, implemented content crash/memory-reclaim recovery via `lastSessionState`, and streamed `WebResponse.body` downloads directly into `MediaStore.Downloads`.
+- **Browser Reliability & Privacy**: Fixed FIFO prompt queuing with tab-close cancellation, external intent hydration barrier & `MainActivity` intent clearing on rotation, deduplicated History entries, safe *History & Caches Only* clearing that preserves logins/cookies, debounced DataStore tracker counters, and `WebView` compat mode improvements.
+
 ## [1.2.1] - 2026-11-26
 
 ### Changed

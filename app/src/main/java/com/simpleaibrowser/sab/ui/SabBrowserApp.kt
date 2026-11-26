@@ -3,6 +3,8 @@ package com.simpleaibrowser.sab.ui
 import android.app.Activity
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -23,6 +25,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -33,6 +38,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simpleaibrowser.sab.core.browser.AddressBarPosition
+import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.ui.components.EngineViewport
 import com.simpleaibrowser.sab.ui.components.FindInPageBar
 import com.simpleaibrowser.sab.ui.components.OperaBottomBar
@@ -40,6 +46,8 @@ import com.simpleaibrowser.sab.ui.components.SabOmniboxEditorOverlay
 import com.simpleaibrowser.sab.ui.components.SabSplashOverlay
 import com.simpleaibrowser.sab.ui.components.SabTopAddressBar
 import com.simpleaibrowser.sab.ui.screens.AddSpeedDialDialog
+import com.simpleaibrowser.sab.ui.screens.ExtensionPopupSheet
+import com.simpleaibrowser.sab.ui.screens.ExtensionStoreScreen
 import com.simpleaibrowser.sab.ui.screens.LibraryScreen
 import com.simpleaibrowser.sab.ui.screens.LinkContextBottomSheet
 import com.simpleaibrowser.sab.ui.screens.OperaMenuBottomSheet
@@ -52,6 +60,7 @@ import com.simpleaibrowser.sab.ui.theme.LocalSabColors
 import com.simpleaibrowser.sab.ui.theme.SabBrowserTheme
 import com.simpleaibrowser.sab.ui.viewmodel.BrowserOverlay
 import com.simpleaibrowser.sab.ui.viewmodel.BrowserViewModel
+import com.simpleaibrowser.sab.ui.viewmodel.ExtensionsTab
 import com.simpleaibrowser.sab.ui.viewmodel.LibraryTab
 import kotlinx.coroutines.delay
 
@@ -85,7 +94,70 @@ fun SabBrowserApp(
     val isFullScreen by viewModel.isFullScreen.collectAsStateWithLifecycle()
     val contextMenuTarget by viewModel.contextMenuTarget.collectAsStateWithLifecycle()
     val activePrompt by viewModel.activePrompt.collectAsStateWithLifecycle()
+    val pendingShareRequest by viewModel.pendingShareRequest.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
+
+    val installedExtensions by viewModel.extensions.installedExtensions.collectAsStateWithLifecycle()
+    val extensionActions by viewModel.extensions.extensionActions.collectAsStateWithLifecycle()
+    val extensionUpdatesCount by viewModel.extensions.availableUpdatesCount.collectAsStateWithLifecycle()
+    val activeExtensionPopup by viewModel.extensions.activePopup.collectAsStateWithLifecycle()
+
+    var pendingFilePrompt by remember { mutableStateOf<WebPromptRequest.FileUpload?>(null) }
+    var pendingPermissionPrompt by remember { mutableStateOf<WebPromptRequest.AndroidPermissions?>(null) }
+
+    val singleFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val p = pendingFilePrompt
+        pendingFilePrompt = null
+        p?.onResult(if (uri != null) listOf(uri) else null)
+        viewModel.dismissPrompt(p?.id)
+    }
+
+    val multiFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        val p = pendingFilePrompt
+        pendingFilePrompt = null
+        p?.onResult(uris.ifEmpty { null })
+        viewModel.dismissPrompt(p?.id)
+    }
+
+    val androidPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val allGranted = grants.isNotEmpty() && grants.values.all { it }
+        val p = pendingPermissionPrompt
+        pendingPermissionPrompt = null
+        p?.onResult(allGranted)
+        viewModel.dismissPrompt(p?.id)
+    }
+
+    LaunchedEffect(activePrompt?.id) {
+        when (val p = activePrompt) {
+            is WebPromptRequest.FileUpload -> {
+                pendingFilePrompt = p
+                val mimes = p.mimeTypes.toTypedArray()
+                if (p.allowMultiple) {
+                    multiFileLauncher.launch(mimes)
+                } else {
+                    singleFileLauncher.launch(mimes)
+                }
+            }
+            is WebPromptRequest.AndroidPermissions -> {
+                pendingPermissionPrompt = p
+                androidPermissionsLauncher.launch(p.permissions.toTypedArray())
+            }
+            else -> Unit
+        }
+    }
+
+    LaunchedEffect(pendingShareRequest) {
+        pendingShareRequest?.let { (subject, payload) ->
+            shareText(context, subject, payload)
+            viewModel.consumeShareRequest()
+        }
+    }
 
     LaunchedEffect(initialExternalUrl) {
         if (!initialExternalUrl.isNullOrBlank()) {
@@ -205,6 +277,7 @@ fun SabBrowserApp(
                             onOpenBookmarks = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.BOOKMARKS)) },
                             onOpenHistory = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.HISTORY)) },
                             onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.DOWNLOADS)) },
+                            onOpenExtensions = { viewModel.openOverlay(BrowserOverlay.Extensions(ExtensionsTab.AMO)) },
                             onOpenSettings = { viewModel.openOverlay(BrowserOverlay.Settings) }
                         )
                     }
@@ -305,10 +378,14 @@ fun SabBrowserApp(
                 }
 
                 BrowserOverlay.OperaMenu -> {
+                    val userExtCount = installedExtensions.count { !it.isBuiltIn }
                     OperaMenuBottomSheet(
                         activeTab = activeTab,
                         isBookmarked = isBookmarked,
                         settings = settings,
+                        extensionActions = extensionActions,
+                        installedExtensionsCount = userExtCount,
+                        extensionUpdatesCount = extensionUpdatesCount,
                         onDismiss = { viewModel.closeOverlay() },
                         onForward = { viewModel.goForward() },
                         onToggleBookmark = { viewModel.toggleCurrentBookmark() },
@@ -324,6 +401,8 @@ fun SabBrowserApp(
                         onOpenBookmarks = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.BOOKMARKS)) },
                         onOpenHistory = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.HISTORY)) },
                         onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.DOWNLOADS)) },
+                        onOpenExtensions = { viewModel.openOverlay(BrowserOverlay.Extensions(ExtensionsTab.AMO)) },
+                        onTriggerExtensionAction = { extId -> viewModel.extensions.triggerBrowserAction(extId) },
                         onPinToSpeedDial = { viewModel.addCurrentPageToSpeedDial() },
                         onToggleAdBlock = { viewModel.setAdBlockEnabled(it) },
                         onToggleDesktop = { viewModel.toggleDesktopMode() },
@@ -358,7 +437,7 @@ fun SabBrowserApp(
                         onDeleteBookmark = { viewModel.deleteBookmark(it) },
                         onDeleteHistory = { viewModel.deleteHistoryItem(it) },
                         onDeleteDownload = { viewModel.deleteDownloadRecord(it) },
-                        onClearHistory = { viewModel.clearAllBrowsingData() },
+                        onClearHistory = { viewModel.clearHistoryOnly() },
                         onClearDownloads = { viewModel.clearDownloads() },
                         onDismiss = { viewModel.closeOverlay() }
                     )
@@ -368,6 +447,7 @@ fun SabBrowserApp(
                     SettingsScreen(
                         settings = settings,
                         engineInfo = viewModel.engineInfo,
+                        installedExtensionsCount = installedExtensions.count { !it.isBuiltIn },
                         onSelectSearchEngine = { viewModel.setSearchEngine(it) },
                         onSelectThemePreset = { viewModel.setThemePreset(it) },
                         onSelectAddressBarPosition = { viewModel.setAddressBarPosition(it) },
@@ -377,7 +457,70 @@ fun SabBrowserApp(
                         onToggleHttpsOnly = { viewModel.setHttpsOnlyEnabled(it) },
                         onToggleForceDarkDefault = { viewModel.setForceDarkDefault(it) },
                         onToggleWallpaper = { viewModel.setShowWallpaperOnStart(it) },
+                        onToggleAutoUpdateExtensions = { viewModel.setAutoUpdateExtensions(it) },
+                        onOpenExtensionsStore = { viewModel.openOverlay(BrowserOverlay.Extensions(ExtensionsTab.INSTALLED)) },
                         onClearAllData = { viewModel.clearAllBrowsingData() },
+                        onDismiss = { viewModel.closeOverlay() }
+                    )
+                }
+
+                is BrowserOverlay.Extensions -> {
+                    val amoCategory by viewModel.extensions.amoCategory.collectAsStateWithLifecycle()
+                    val amoQuery by viewModel.extensions.amoQuery.collectAsStateWithLifecycle()
+                    val amoResults by viewModel.extensions.amoResults.collectAsStateWithLifecycle()
+                    val amoLoading by viewModel.extensions.amoLoading.collectAsStateWithLifecycle()
+                    val amoError by viewModel.extensions.amoError.collectAsStateWithLifecycle()
+                    val ghQuery by viewModel.extensions.githubQuery.collectAsStateWithLifecycle()
+                    val ghResults by viewModel.extensions.githubResults.collectAsStateWithLifecycle()
+                    val ghLoading by viewModel.extensions.githubLoading.collectAsStateWithLifecycle()
+                    val ghError by viewModel.extensions.githubError.collectAsStateWithLifecycle()
+                    val selectedGhRepo by viewModel.extensions.selectedGitHubRepo.collectAsStateWithLifecycle()
+                    val ghRepoLoading by viewModel.extensions.gitHubRepoLoading.collectAsStateWithLifecycle()
+                    val extInstallState by viewModel.extensions.installState.collectAsStateWithLifecycle()
+
+                    ExtensionStoreScreen(
+                        initialTab = currentOverlay.initialTab,
+                        isGeckoActive = viewModel.engineInfo.isGeckoViewActive,
+                        autoUpdateEnabled = settings.autoUpdateExtensions,
+                        lastUpdateCheckAt = settings.lastExtensionUpdateCheckAt,
+                        amoCategory = amoCategory,
+                        amoQuery = amoQuery,
+                        amoResults = amoResults,
+                        amoLoading = amoLoading,
+                        amoError = amoError,
+                        githubQuery = ghQuery,
+                        githubResults = ghResults,
+                        githubLoading = ghLoading,
+                        githubError = ghError,
+                        selectedGitHubRepo = selectedGhRepo,
+                        gitHubRepoLoading = ghRepoLoading,
+                        installedExtensions = installedExtensions,
+                        updatesCount = extensionUpdatesCount,
+                        installState = extInstallState,
+                        onSelectAmoCategory = { viewModel.extensions.selectAmoCategory(it) },
+                        onAmoQueryChange = { viewModel.extensions.updateAmoQuery(it) },
+                        onSearchAmo = { viewModel.extensions.searchAmo() },
+                        onGitHubQueryChange = { viewModel.extensions.updateGitHubQuery(it) },
+                        onSearchGitHub = { viewModel.extensions.searchGitHub() },
+                        onInspectGitHubRepo = { viewModel.extensions.inspectGitHubRepo(it) },
+                        onDismissGitHubRepo = { viewModel.extensions.clearSelectedGitHubRepo() },
+                        onInstallCatalogItem = { viewModel.extensions.installCatalogItem(it) },
+                        onInstallGitHubAsset = { detail, asset -> viewModel.extensions.installGitHubAsset(detail, asset) },
+                        onInstallDirectInput = { viewModel.extensions.installFromDirectInput(it) },
+                        onToggleEnabled = { id, enabled -> viewModel.extensions.toggleEnabled(id, enabled) },
+                        onTogglePrivateBrowsing = { id, allowed -> viewModel.extensions.togglePrivateBrowsing(id, allowed) },
+                        onToggleAutoUpdate = { id, auto -> viewModel.extensions.toggleAutoUpdate(id, auto) },
+                        onToggleGlobalAutoUpdate = { viewModel.setAutoUpdateExtensions(it) },
+                        onCheckUpdatesNow = { viewModel.extensions.checkAndApplyUpdates(silent = false, applyAutomatically = false) },
+                        onUpdateAll = { viewModel.extensions.updateAllAvailable() },
+                        onUpdateSingle = { viewModel.extensions.updateSingleExtension(it) },
+                        onUninstall = { viewModel.extensions.uninstall(it) },
+                        onOpenOptions = {
+                            viewModel.closeOverlay()
+                            viewModel.extensions.openOptionsPage(it)
+                        },
+                        onOpenUrlInTab = { viewModel.navigateToUrl(it) },
+                        onClearInstallState = { viewModel.extensions.clearInstallState() },
                         onDismiss = { viewModel.closeOverlay() }
                     )
                 }
@@ -388,6 +531,13 @@ fun SabBrowserApp(
                         onDismiss = { viewModel.closeOverlay() }
                     )
                 }
+            }
+
+            activeExtensionPopup?.let { popup ->
+                ExtensionPopupSheet(
+                    popup = popup,
+                    onDismiss = { viewModel.extensions.dismissPopup() }
+                )
             }
 
             // Long-Press Link / Image Context Sheet
@@ -408,7 +558,7 @@ fun SabBrowserApp(
             activePrompt?.let { prompt ->
                 WebPromptDialog(
                     prompt = prompt,
-                    onDismissComplete = { viewModel.dismissPrompt() }
+                    onDismissComplete = { viewModel.dismissPrompt(prompt.id) }
                 )
             }
 

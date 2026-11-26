@@ -294,7 +294,7 @@ fun LibraryScreen(
             text = {
                 Text(
                     if (isDownloads) "This removes entries from SAB's list. Saved files remain in your Android Downloads folder."
-                    else "This clears visited URLs, cookies, and web storage across SAB."
+                    else "This clears your browsing history and temporary web caches. Bookmarks and site logins stay safe."
                 )
             },
             confirmButton = {
@@ -304,7 +304,7 @@ fun LibraryScreen(
                         confirmClear = false
                     }
                 ) {
-                    Text("Clear All", color = MaterialTheme.colorScheme.error)
+                    Text("Clear", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
@@ -318,6 +318,7 @@ fun LibraryScreen(
 fun SettingsScreen(
     settings: BrowserSettings,
     engineInfo: EngineInfo,
+    installedExtensionsCount: Int,
     onSelectSearchEngine: (SearchEngine) -> Unit,
     onSelectThemePreset: (ThemePreset) -> Unit,
     onSelectAddressBarPosition: (AddressBarPosition) -> Unit,
@@ -327,6 +328,8 @@ fun SettingsScreen(
     onToggleHttpsOnly: (Boolean) -> Unit,
     onToggleForceDarkDefault: (Boolean) -> Unit,
     onToggleWallpaper: (Boolean) -> Unit,
+    onToggleAutoUpdateExtensions: (Boolean) -> Unit,
+    onOpenExtensionsStore: () -> Unit,
     onClearAllData: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -598,6 +601,47 @@ fun SettingsScreen(
                                     )
                                 }
                                 Icon(Icons.Filled.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+
+                // Extensions & Auto-Updates
+                item(key = "extensions_section") {
+                    SettingsSectionCard(title = "EXTENSIONS & AUTO-UPDATES") {
+                        Column {
+                            SettingsSwitchRow(
+                                title = "Auto-Update Extensions",
+                                subtitle = "Automatically install compatible updates from Mozilla Add-ons & GitHub Releases every 12 hours",
+                                checked = settings.autoUpdateExtensions,
+                                onCheckedChange = onToggleAutoUpdateExtensions
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onOpenExtensionsStore)
+                                    .padding(vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Open Extension Store & Manager",
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Text(
+                                        text = if (installedExtensionsCount > 0) "$installedExtensionsCount extension(s) installed"
+                                        else "Browse Mozilla Add-ons & GitHub WebExtensions",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText
+                                    )
+                                }
+                                Text(
+                                    text = "Manage",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
                         }
                     }
