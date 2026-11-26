@@ -103,6 +103,7 @@ androidComponents {
       description = "Copies the $variantName APKs to build/outputs/sab/$variantName under their release names."
       from(apkDir)
       include("*.apk")
+      exclude("app-$variantName.apk")
       into(targetDir)
       rename("^app-arm64-v8a-$variantName\\.apk$", "sab-$variantName-arm64-v8a.apk")
       rename("^app-x86_64-$variantName\\.apk$", "sab-$variantName-x86_64.apk")
@@ -120,6 +121,25 @@ androidComponents {
       }
     }
     tasks.matching { it.name == "assemble$capitalized" }.configureEach { finalizedBy(packageTask) }
+
+    if (variantName == "debug") {
+      val universalApkFile = apkDir.map { it.file("app-universal-debug.apk") }
+      val standardApkFile = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")
+      val mirrorDebugTask = tasks.register("mirrorStandardDebugApk") {
+        group = "build"
+        description = "Mirrors app-universal-debug.apk to app-debug.apk for standard APK installers and emulators."
+        mustRunAfter(packageTask)
+        inputs.file(universalApkFile)
+        outputs.file(standardApkFile)
+        doLast {
+          val src = universalApkFile.get().asFile
+          if (src.isFile) {
+            src.copyTo(standardApkFile.get().asFile, overwrite = true)
+          }
+        }
+      }
+      tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy(mirrorDebugTask) }
+    }
   }
 }
 
