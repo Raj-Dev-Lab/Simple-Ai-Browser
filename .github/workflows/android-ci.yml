@@ -6,64 +6,200 @@ on:
     tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
+# `contents: write` is only used to attach APKs to the GitHub Release published on v* tags.
 permissions:
   contents: write
 
+# A newer push to the same branch or tag replaces its older run; different tags never cancel each other.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Certificate fingerprints of the two signing keys (docs/KEYSTORE.md). CI refuses to publish any
+  # APK that is signed with a different key.
+  DEBUG_CERT_SHA256: 5924c3a9170e864f00e44307c7f03edc561df9cf29ae29e4c0891330fde51dc8
+  RELEASE_CERT_SHA256: 4f8bcde6723e21af74294d650b1afa4dd8632482ee6dd695dca42a9da07380b9
+  RELEASE_NOTE_SIGNED: |
+    > `sab-release-*.apk` files are signed with the official Simple AI Browser release key
+    > (certificate SHA-256 `4F:8B:CD:E6:…:A0:73:80:B9`, see `docs/KEYSTORE.md`).
+    > Verify any download with `apksigner verify --print-certs <apk>`; file checksums are in `SHA256SUMS.txt`.
+  RELEASE_NOTE_UNSIGNED: |
+    > ⚠️ **Signed release APKs are not attached yet.** The repository secrets `KEYSTORE_BASE64`,
+    > `STORE_PASSWORD` and `KEY_PASSWORD` are not configured, so the release build was skipped.
+    > One-time setup (about 3 minutes): [docs/KEYSTORE.md](https://github.com/Raj-Dev-Lab/Simple-Ai-Browser/blob/main/docs/KEYSTORE.md).
+    > The debug APKs below are fully functional.
+
 jobs:
   build-and-test:
-    name: Build APK & Run Tests
+    name: Build APKs & run unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # full history + tags: needed by the release version check
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Setup Android SDK 36.1
+      - name: Install Android SDK packages
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36.1" "build-tools;36.1.0"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36.1" "build-tools;36.0.0"
 
-      - name: Setup Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Gradle (committed wrapper, checksum-verified)
+        uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '9.3.1'
+          cache-provider: basic
 
-      - name: Generate temporary debug keystore for CI
+      - name: Check release version (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: .github/scripts/check_version.sh
+
+      - name: Run unit tests (all JUnit + Robolectric tests)
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Build debug APKs
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Verify debug APK signatures (shared committed debug key)
+        run: .github/scripts/verify_apk_signature.sh app/build/outputs/sab/debug "$DEBUG_CERT_SHA256"
+
+      - name: Restore release keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          keytool -genkeypair -v \
-            -keystore debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::notice title=Release signing not configured::The KEYSTORE_BASE64 secret is missing, so no signed release APK is built. One-time setup: docs/KEYSTORE.md"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/sab-release.jks"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "path=$RUNNER_TEMP/sab-release.jks" >> "$GITHUB_OUTPUT"
 
-      - name: Run Unit Tests & Assemble Debug APK
-        run: gradle :app:testDebugUnitTest --tests "com.example.ExampleUnitTest" :app:assembleDebug --stacktrace
+      - name: Build signed release APKs
+        if: steps.keystore.outputs.available == 'true'
+        env:
+          KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --stacktrace
 
-      - name: Rename Debug APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/sab-debug-arm64-x86_64.apk
+      - name: Verify release APK signatures (official release key)
+        if: steps.keystore.outputs.available == 'true'
+        run: .github/scripts/verify_apk_signature.sh app/build/outputs/sab/release "$RELEASE_CERT_SHA256"
 
-      - name: Upload Debug APK Artifact
-        uses: actions/upload-artifact@v4
+      - name: Android Lint (non-blocking)
+        continue-on-error: true
+        run: ./gradlew :app:lintDebug --stacktrace
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
-          name: sab-debug-arm64-x86_64-apk
-          path: app/build/outputs/apk/debug/sab-debug-arm64-x86_64.apk
+          name: lint-report
+          path: app/build/reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Collect APKs and checksums
+        run: .github/scripts/collect_apks.sh app/build/outputs/sab dist "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: sab-debug-apks
+          path: dist/sab-debug-*.apk
+          compression-level: 0
           retention-days: 30
 
-      - name: Publish GitHub Release on Version Tag
+      - name: Upload signed release APKs
+        if: env.RELEASE_READY == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sab-release-apks
+          path: dist/sab-release-*.apk
+          compression-level: 0
+          retention-days: 90
+
+      - name: Publish GitHub Release (version tags only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          make_latest: true
+          fail_on_unmatched_files: true
+          body: ${{ env.RELEASE_READY == 'true' && env.RELEASE_NOTE_SIGNED || env.RELEASE_NOTE_UNSIGNED }}
           files: |
-            app/build/outputs/apk/debug/sab-debug-arm64-x86_64.apk
+            dist/*.apk
+            dist/SHA256SUMS.txt
+
+  instrumented-tests:
+    name: Launch smoke test on an Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Emulator infrastructure must never block a release; a failure is reported, not red.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up Gradle (committed wrapper, checksum-verified)
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Run instrumented tests on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: default
+          arch: x86_64
+          ram-size: 3072M
+          disk-size: 6G
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            sudo udevadm settle
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace
+
+      - name: Upload instrumented test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: instrumented-test-reports
+          path: app/build/outputs/androidTest-results/
+          if-no-files-found: ignore
+          retention-days: 14

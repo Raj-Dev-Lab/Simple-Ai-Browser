@@ -1,3 +1,4 @@
+import com.android.build.api.artifact.SingleArtifact
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 
 plugins {
@@ -16,8 +17,8 @@ android {
     applicationId = "com.simpleaibrowser.sab"
     minSdk = 29
     targetSdk = 36
-    versionCode = 4
-    versionName = "1.2.0"
+    versionCode = 5
+    versionName = "1.2.1"
 
     ndk {
       abiFilters += listOf("arm64-v8a", "x86_64")
@@ -71,6 +72,54 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+
+  // One APK per CPU architecture plus one universal APK. GeckoView ships a ~150-170 MB native
+  // library per ABI, so a per-ABI APK is roughly half the size of the universal one.
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "x86_64")
+      isUniversalApk = true
+    }
+  }
+}
+
+// Distributable APK names. AGP writes its default names (app-arm64-v8a-debug.apk,
+// app-universal-release.apk, ...); this task mirrors every built APK into
+// build/outputs/sab/<variant>/ under the public release names:
+//   sab-<variant>-arm64-v8a.apk, sab-<variant>-x86_64.apk, sab-<variant>-arm64-x86_64.apk (universal)
+// It runs automatically after assembleDebug / assembleRelease and is what CI verifies and publishes.
+// Only strings and Providers are captured here: the project enables the Gradle configuration cache.
+androidComponents {
+  onVariants(selector().all()) { variant ->
+    val variantName = variant.name
+    val capitalized = variantName.replaceFirstChar { it.uppercase() }
+    val apkDir = variant.artifacts.get(SingleArtifact.APK)
+    val targetDir = layout.buildDirectory.dir("outputs/sab/$variantName")
+    val packageTask = tasks.register<Copy>("packageSab${capitalized}Apks") {
+      group = "build"
+      description = "Copies the $variantName APKs to build/outputs/sab/$variantName under their release names."
+      from(apkDir)
+      include("*.apk")
+      into(targetDir)
+      rename("^app-arm64-v8a-$variantName\\.apk$", "sab-$variantName-arm64-v8a.apk")
+      rename("^app-x86_64-$variantName\\.apk$", "sab-$variantName-x86_64.apk")
+      rename("^app-universal-$variantName\\.apk$", "sab-$variantName-arm64-x86_64.apk")
+      // Drop APKs of earlier builds so the folder never mixes versions (Task-receiver code only).
+      doFirst { destinationDir?.takeIf { it.isDirectory }?.deleteRecursively() }
+      doLast {
+        val unknown = destinationDir.listFiles()?.filterNot { it.name.startsWith("sab-") }.orEmpty()
+        if (unknown.isNotEmpty()) {
+          throw GradleException(
+            "APK output names changed unexpectedly: ${unknown.joinToString { it.name }}. " +
+              "Update the rename() patterns in app/build.gradle.kts."
+          )
+        }
+      }
+    }
+    tasks.matching { it.name == "assemble$capitalized" }.configureEach { finalizedBy(packageTask) }
   }
 }
 

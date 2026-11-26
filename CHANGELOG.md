@@ -3,6 +3,18 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.1] - 2026-11-26
+
+### Changed
+- **Real CI & reproducible builds**: the committed Gradle 9.3.1 wrapper (SHA-256-verified) and the one shared committed debug keystore replace the per-run random key, so debug APKs from every machine and from CI update in place. CI now publishes **per-ABI APKs** (`sab-*-arm64-v8a.apk` for phones, `sab-*-x86_64.apk` for emulators/Chromebooks) plus the universal APK under stable names, and verifies every APK's signature against the fixed certificate fingerprints before anything is attached. Signed release APKs build and attach automatically once the owner adds the three secrets from `docs/KEYSTORE.md` (until then that step is skipped with a notice — CI never turns red because of it).
+
+### Added
+- **AGENTS.md** with the project rules for contributors and AI agents, and a pointer to the private project memory.
+- **Emulator launch smoke test** (`connectedDebugAndroidTest`) running in CI on an Android emulator (non-blocking).
+
+### Fixed
+- Release hygiene: a `v*` tag is refused unless it matches `versionName`, has a `CHANGELOG.md` section and raises `versionCode`; unit tests run **all** test classes; test and lint reports are uploaded on every run.
+
 ## [1.2.0] - 2026-11-25
 
 ### Added
