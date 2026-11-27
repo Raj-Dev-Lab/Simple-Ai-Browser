@@ -9,7 +9,9 @@
   const state = {
     forceDark: false,
     readerMode: false,
-    textZoomPercent: 100
+    textZoomPercent: 100,
+    doNotTrack: true,
+    globalPrivacyControl: true
   };
 
   let port = null;
@@ -430,7 +432,35 @@
     applyTextZoom();
   }
 
+  function applyNavigatorPrivacy() {
+    try {
+      const targetProto = Object.getPrototypeOf(window.navigator) || window.navigator;
+      Object.defineProperty(targetProto, "doNotTrack", {
+        get: () => (state.doNotTrack ? "1" : null),
+        configurable: true
+      });
+      Object.defineProperty(targetProto, "globalPrivacyControl", {
+        get: () => Boolean(state.globalPrivacyControl),
+        configurable: true
+      });
+    } catch (_) {
+      try {
+        Object.defineProperty(window.navigator, "doNotTrack", {
+          get: () => (state.doNotTrack ? "1" : null),
+          configurable: true
+        });
+        Object.defineProperty(window.navigator, "globalPrivacyControl", {
+          get: () => Boolean(state.globalPrivacyControl),
+          configurable: true
+        });
+      } catch (_inner) {
+        // Read-only navigator in hardened context
+      }
+    }
+  }
+
   function applyAllModes() {
+    applyNavigatorPrivacy();
     applyForceDark();
     applyReaderMode();
     applyTextZoom();
@@ -451,6 +481,72 @@
     };
   }
 
+  function scanPageMedia() {
+    const items = [];
+    const seen = new Set();
+
+    function pushItem(url, title, kind, mimeType) {
+      if (!url || typeof url !== "string") return;
+      const trimmed = url.trim();
+      if (!trimmed || trimmed.startsWith("javascript:") || trimmed.startsWith("about:")) return;
+      if (seen.has(trimmed)) return;
+      seen.add(trimmed);
+      items.push({
+        url: trimmed,
+        title: (title || "").trim() || trimmed.split("/").pop()?.split("?")[0] || trimmed,
+        kind: kind || "file",
+        mimeType: mimeType || ""
+      });
+    }
+
+    document.querySelectorAll("video").forEach((v, idx) => {
+      const src = v.currentSrc || v.src;
+      if (src) pushItem(src, v.title || v.getAttribute("aria-label") || `Video ${idx + 1}`, "video", "video/mp4");
+      v.querySelectorAll("source").forEach((s) => {
+        if (s.src) pushItem(s.src, v.title || `Video Source ${idx + 1}`, "video", s.type || "video/mp4");
+      });
+    });
+
+    document.querySelectorAll("audio").forEach((a, idx) => {
+      const src = a.currentSrc || a.src;
+      if (src) pushItem(src, a.title || a.getAttribute("aria-label") || `Audio ${idx + 1}`, "audio", "audio/mpeg");
+      a.querySelectorAll("source").forEach((s) => {
+        if (s.src) pushItem(s.src, a.title || `Audio Source ${idx + 1}`, "audio", s.type || "audio/mpeg");
+      });
+    });
+
+    document.querySelectorAll("img").forEach((img, idx) => {
+      const w = img.naturalWidth || img.width || 0;
+      const h = img.naturalHeight || img.height || 0;
+      if (w >= 140 || h >= 140) {
+        const src = img.currentSrc || img.src;
+        if (src && !src.startsWith("data:image/svg")) {
+          pushItem(src, img.alt || img.title || `Image ${idx + 1}`, "image", "");
+        }
+      }
+    });
+
+    const downloadableExt = /\.(mp4|mkv|webm|mov|avi|mp3|m4a|flac|ogg|wav|pdf|zip|rar|7z|tar|gz|apk|iso|torrent)(\?|$)/i;
+    document.querySelectorAll("a[href]").forEach((a) => {
+      const href = a.href || a.getAttribute("href") || "";
+      if (href.startsWith("magnet:")) {
+        pushItem(href, a.textContent || "Magnet Link", "magnet", "application/x-bittorrent");
+      } else if (downloadableExt.test(href) || a.hasAttribute("download")) {
+        const lower = href.toLowerCase();
+        const kind = lower.includes(".torrent") ? "torrent"
+          : /\.(mp4|mkv|webm|mov|avi)(\?|$)/.test(lower) ? "video"
+          : /\.(mp3|m4a|flac|ogg|wav)(\?|$)/.test(lower) ? "audio"
+          : /\.(zip|rar|7z|tar|gz|iso)(\?|$)/.test(lower) ? "archive"
+          : /\.(pdf)(\?|$)/.test(lower) ? "document"
+          : /\.(apk)(\?|$)/.test(lower) ? "app"
+          : "file";
+        pushItem(href, a.textContent || a.getAttribute("download") || "", kind, "");
+      }
+    });
+
+    return items.slice(0, 60);
+  }
+
   function connectBridge(attempt = 0) {
     if (typeof browser === "undefined" || !browser.runtime || !browser.runtime.connectNative) {
       return;
@@ -463,8 +559,18 @@
         if (msg.type === "SYNC_MODES") {
           state.forceDark = Boolean(msg.forceDark);
           state.readerMode = Boolean(msg.readerMode);
-          state.textZoomPercent = Number(msg.textZoomPercent) || 100;
+          state.textZoomPercent = Number(msg.textZoomPercent || msg.textZoom) || 100;
+          if (msg.doNotTrack !== undefined) {
+            state.doNotTrack = Boolean(msg.doNotTrack);
+          }
+          if (msg.globalPrivacyControl !== undefined) {
+            state.globalPrivacyControl = Boolean(msg.globalPrivacyControl);
+          }
           applyAllModes();
+        } else if (msg.type === "PRIVACY_CONFIG") {
+          state.doNotTrack = Boolean(msg.doNotTrack);
+          state.globalPrivacyControl = Boolean(msg.globalPrivacyControl);
+          applyNavigatorPrivacy();
         } else if (msg.type === "SET_FORCE_DARK") {
           state.forceDark = Boolean(msg.enabled);
           applyForceDark();
@@ -479,6 +585,12 @@
             type: "SNAPSHOT_RESULT",
             requestId: msg.requestId,
             payload: extractSnapshot(msg.maxChars)
+          });
+        } else if (msg.type === "SCAN_PAGE_MEDIA") {
+          nextPort.postMessage({
+            type: "MEDIA_SCAN_RESULT",
+            requestId: msg.requestId,
+            items: scanPageMedia()
           });
         }
       });

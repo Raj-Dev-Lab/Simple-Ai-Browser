@@ -17,8 +17,8 @@ android {
     applicationId = "com.simpleaibrowser.sab"
     minSdk = 29
     targetSdk = 36
-    versionCode = 6
-    versionName = "1.3.0"
+    versionCode = 7
+    versionName = "1.4.0"
 
     ndk {
       abiFilters += listOf("arm64-v8a", "x86_64")
@@ -199,7 +199,13 @@ dependencies {
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
-  // implementation(libs.okhttp)
+  implementation(libs.okhttp)
+  implementation(libs.libtorrent4j)
+  implementation(libs.libtorrent4j.android.arm64)
+  implementation(libs.libtorrent4j.android.x8664)
+  implementation(libs.androidx.media3.common)
+  implementation(libs.androidx.media3.exoplayer)
+  implementation(libs.androidx.media3.exoplayer.hls)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

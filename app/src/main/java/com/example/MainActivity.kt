@@ -8,7 +8,9 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import com.simpleaibrowser.sab.downloads.SabDownloadService
 import com.simpleaibrowser.sab.ui.SabBrowserApp
+import com.simpleaibrowser.sab.ui.viewmodel.BrowserOverlay
 import com.simpleaibrowser.sab.ui.viewmodel.BrowserViewModel
 
 class MainActivity : ComponentActivity() {
@@ -22,6 +24,9 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
         )
 
+        if (consumeOpenDownloadsExtra(intent)) {
+            browserViewModel.openOverlay(BrowserOverlay.DownloadManager())
+        }
         val incomingUrl = consumeIncomingUrl(intent)
 
         setContent {
@@ -35,9 +40,27 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (consumeOpenDownloadsExtra(intent)) {
+            browserViewModel.openOverlay(BrowserOverlay.DownloadManager())
+        }
         consumeIncomingUrl(intent)?.let { url ->
             browserViewModel.handleIncomingExternalUri(url)
         }
+    }
+
+    override fun onDestroy() {
+        if (isFinishing) {
+            browserViewModel.handleAppExitCleanup()
+        }
+        super.onDestroy()
+    }
+
+    private fun consumeOpenDownloadsExtra(intent: Intent?): Boolean {
+        val flag = intent?.getBooleanExtra(SabDownloadService.EXTRA_OPEN_DOWNLOADS, false) == true
+        if (flag) {
+            intent?.removeExtra(SabDownloadService.EXTRA_OPEN_DOWNLOADS)
+        }
+        return flag
     }
 
     private fun consumeIncomingUrl(intent: Intent?): String? {

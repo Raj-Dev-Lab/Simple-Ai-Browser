@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Search
@@ -38,6 +39,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -59,9 +61,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.simpleaibrowser.sab.core.browser.AddressBarPosition
+import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
+import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.SearchEngine
 import com.simpleaibrowser.sab.core.browser.ThemePreset
+import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.data.BookmarkEntity
 import com.simpleaibrowser.sab.data.BrowserSettings
@@ -88,6 +93,7 @@ fun LibraryScreen(
     onDeleteDownload: (Long) -> Unit,
     onClearHistory: () -> Unit,
     onClearDownloads: () -> Unit,
+    onOpenFullDownloadManager: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     BackHandler(onBack = onDismiss)
@@ -254,12 +260,39 @@ fun LibraryScreen(
                     }
 
                     LibraryTab.DOWNLOADS -> {
+                        item(key = "open_full_dm_banner") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(sabColors.shieldGreen.copy(alpha = 0.14f))
+                                    .border(1.dp, sabColors.shieldGreen.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                                    .clickable(onClick = onOpenFullDownloadManager)
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Full Download Manager", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        "Multi-thread HTTP, Torrents, Page Media & File Explorer",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText
+                                    )
+                                }
+                                Text(
+                                    "Open",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = sabColors.shieldGreen
+                                )
+                            }
+                        }
                         if (filteredDownloads.isEmpty()) {
                             item {
                                 EmptyLibraryCard(
                                     icon = Icons.Filled.Download,
                                     title = "No downloads yet",
-                                    subtitle = "Files downloaded via GeckoView or long-press link menus appear here and save to your Android Downloads folder."
+                                    subtitle = "Files downloaded via SAB Download Manager appear here and export to Android Downloads."
                                 )
                             }
                         } else {
@@ -324,12 +357,25 @@ fun SettingsScreen(
     onSelectAddressBarPosition: (AddressBarPosition) -> Unit,
     onToggleRestoreTabs: (Boolean) -> Unit,
     onSelectDefaultTextZoom: (Int) -> Unit,
-    onToggleAdBlock: (Boolean) -> Unit,
+    onSelectTrackingLevel: (TrackingProtectionLevel) -> Unit,
+    onToggleDoNotTrack: (Boolean) -> Unit,
+    onToggleGpc: (Boolean) -> Unit,
+    onSelectCookieMode: (CookieIsolationMode) -> Unit,
+    onToggleCookiePurging: (Boolean) -> Unit,
+    onToggleStripTrackingParams: (Boolean) -> Unit,
+    onToggleBounceTracking: (Boolean) -> Unit,
+    onToggleFingerprintingDefense: (Boolean) -> Unit,
+    onToggleLocalNetworkProtection: (Boolean) -> Unit,
+    onToggleSafeBrowsing: (Boolean) -> Unit,
+    onUpdateDohConfig: (DnsOverHttpsMode, String, Boolean) -> Unit,
+    onToggleClearOnExit: (Boolean) -> Unit,
+    onPurgeCookiesOnly: () -> Unit,
     onToggleHttpsOnly: (Boolean) -> Unit,
     onToggleForceDarkDefault: (Boolean) -> Unit,
     onToggleWallpaper: (Boolean) -> Unit,
     onToggleAutoUpdateExtensions: (Boolean) -> Unit,
     onOpenExtensionsStore: () -> Unit,
+    onOpenDownloadManager: () -> Unit = {},
     onClearAllData: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -337,6 +383,7 @@ fun SettingsScreen(
 
     val sabColors = LocalSabColors.current
     var showClearDialog by remember { mutableStateOf(false) }
+    var showLicenseDialog by remember { mutableStateOf(false) }
 
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -557,15 +604,156 @@ fun SettingsScreen(
 
                 // Privacy & Security
                 item(key = "privacy_section") {
+                    var customDohDraft by remember(settings.customDohUrl) { mutableStateOf(settings.customDohUrl) }
                     SettingsSectionCard(title = "PRIVACY & SHIELD") {
-                        Column {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // ETP Level Selector
+                            Text(
+                                text = "Enhanced Tracking Protection",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                TrackingProtectionLevel.entries.forEach { level ->
+                                    val selected = settings.trackingProtectionLevel == level
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                if (selected) sabColors.shieldGreen.copy(alpha = 0.2f)
+                                                else sabColors.chromeBar
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (selected) sabColors.shieldGreen else sabColors.chromeBorder,
+                                                RoundedCornerShape(10.dp)
+                                            )
+                                            .clickable { onSelectTrackingLevel(level) }
+                                            .padding(vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = level.displayName,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = if (selected) sabColors.shieldGreen else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = settings.trackingProtectionLevel.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = sabColors.subtleText
+                            )
+
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
                             SettingsSwitchRow(
-                                title = "Ad & Tracker Blocker",
-                                subtitle = "GeckoView Enhanced Tracking Protection + Safe Browsing",
-                                checked = settings.adBlockEnabled,
-                                onCheckedChange = onToggleAdBlock
+                                title = "Do Not Track (DNT: 1)",
+                                subtitle = "Send DNT request header and navigator.doNotTrack signal to websites",
+                                checked = settings.doNotTrackEnabled,
+                                onCheckedChange = onToggleDoNotTrack
                             )
                             HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Global Privacy Control (Sec-GPC)",
+                                subtitle = "Signal websites not to sell or share your personal data",
+                                checked = settings.globalPrivacyControlEnabled,
+                                onCheckedChange = onToggleGpc
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            // Cookie Isolation Mode
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Cookie Isolation Policy",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                CookieIsolationMode.entries.forEach { mode ->
+                                    val selected = settings.cookieIsolationMode == mode
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                                else sabColors.chromeBar
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (selected) MaterialTheme.colorScheme.primary else sabColors.chromeBorder,
+                                                RoundedCornerShape(12.dp)
+                                            )
+                                            .clickable { onSelectCookieMode(mode) }
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(mode.displayName, style = MaterialTheme.typography.titleSmall)
+                                            Text(mode.subtitle, style = MaterialTheme.typography.bodySmall, color = sabColors.subtleText)
+                                        }
+                                        if (selected) {
+                                            Icon(Icons.Filled.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Purge Unused Tracker Cookies",
+                                subtitle = "Automatically evict state from unvisited third-party trackers",
+                                checked = settings.cookiePurgingEnabled,
+                                onCheckedChange = onToggleCookiePurging
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Bounce Tracking Protection",
+                                subtitle = "Purge cookies & storage left by hidden redirect-bounce trackers",
+                                checked = settings.bounceTrackingProtection,
+                                onCheckedChange = onToggleBounceTracking
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Strip URL Tracking Parameters",
+                                subtitle = "Remove utm_*, fbclid, gclid, igshid, and ref tags before loading",
+                                checked = settings.stripTrackingParams,
+                                onCheckedChange = onToggleStripTrackingParams
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Fingerprinting Resistance",
+                                subtitle = "Mask canvas, hardware concurrency & device entropy against profiling",
+                                checked = settings.fingerprintingDefense,
+                                onCheckedChange = onToggleFingerprintingDefense
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Local Network Access Protection",
+                                subtitle = "Prevent public websites & trackers from probing your LAN / localhost",
+                                checked = settings.localNetworkProtection,
+                                onCheckedChange = onToggleLocalNetworkProtection
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Safe Browsing Guard",
+                                subtitle = "Block known phishing, malware, and harmful downloads",
+                                checked = settings.safeBrowsingEnabled,
+                                onCheckedChange = onToggleSafeBrowsing
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
                             SettingsSwitchRow(
                                 title = "HTTPS-Only Mode",
                                 subtitle = "Upgrade insecure HTTP addresses automatically",
@@ -573,6 +761,88 @@ fun SettingsScreen(
                                 onCheckedChange = onToggleHttpsOnly
                             )
                             HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            // Encrypted DNS over HTTPS
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Encrypted DNS over HTTPS (DoH)",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                DnsOverHttpsMode.entries.forEach { mode ->
+                                    val selected = settings.dnsOverHttpsMode == mode
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                if (selected) sabColors.shieldGreen.copy(alpha = 0.14f)
+                                                else sabColors.chromeBar
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (selected) sabColors.shieldGreen else sabColors.chromeBorder,
+                                                RoundedCornerShape(12.dp)
+                                            )
+                                            .clickable {
+                                                onUpdateDohConfig(mode, customDohDraft.trim(), settings.dohStrict)
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(mode.displayName, style = MaterialTheme.typography.titleSmall)
+                                            Text(mode.subtitle, style = MaterialTheme.typography.bodySmall, color = sabColors.subtleText)
+                                        }
+                                        if (selected) {
+                                            Icon(Icons.Filled.Check, contentDescription = "Selected", tint = sabColors.shieldGreen)
+                                        }
+                                    }
+                                }
+                                if (settings.dnsOverHttpsMode == DnsOverHttpsMode.CUSTOM) {
+                                    OutlinedTextField(
+                                        value = customDohDraft,
+                                        onValueChange = { customDohDraft = it },
+                                        label = { Text("Custom DoH HTTPS Endpoint") },
+                                        placeholder = { Text("https://dns.example.com/dns-query") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    OutlinedButton(
+                                        onClick = {
+                                            onUpdateDohConfig(
+                                                DnsOverHttpsMode.CUSTOM,
+                                                customDohDraft.trim(),
+                                                settings.dohStrict
+                                            )
+                                        },
+                                        modifier = Modifier.align(Alignment.End)
+                                    ) {
+                                        Text("Apply Custom DoH")
+                                    }
+                                }
+                                if (settings.dnsOverHttpsMode != DnsOverHttpsMode.OFF) {
+                                    SettingsSwitchRow(
+                                        title = "Strict Encrypted DNS Only",
+                                        subtitle = "Do not fall back to unencrypted ISP DNS if DoH fails",
+                                        checked = settings.dohStrict,
+                                        onCheckedChange = { strict ->
+                                            onUpdateDohConfig(settings.dnsOverHttpsMode, customDohDraft.trim(), strict)
+                                        }
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            SettingsSwitchRow(
+                                title = "Clear Cookies & History on Exit",
+                                subtitle = "Automatically wipe browsing history, cookies & cache when SAB closes",
+                                checked = settings.clearPrivateDataOnExit,
+                                onCheckedChange = onToggleClearOnExit
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
                             SettingsSwitchRow(
                                 title = "Force Dark Pages by Default",
                                 subtitle = "Automatically apply dark palette to bright websites",
@@ -580,17 +850,43 @@ fun SettingsScreen(
                                 onCheckedChange = onToggleForceDarkDefault
                             )
                             HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPurgeCookiesOnly() }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Purge Site Cookies & DOM Storage",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "Clear all site cookies & storage while keeping bookmarks and history",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText
+                                    )
+                                }
+                                Icon(Icons.Filled.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            }
+
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable { showClearDialog = true }
-                                    .padding(vertical = 14.dp),
+                                    .padding(vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "Clear Browsing Data",
+                                        text = "Clear All Browsing Data",
                                         style = MaterialTheme.typography.titleSmall,
                                         color = MaterialTheme.colorScheme.error
                                     )
@@ -647,9 +943,53 @@ fun SettingsScreen(
                     }
                 }
 
+                // Download Manager & File System
+                item(key = "downloads_section") {
+                    SettingsSectionCard(title = "DOWNLOAD MANAGER & STORAGE") {
+                        val dl = settings.downloadSettings
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DiagnosticLine("Storage Mode", dl.storageLocationMode.title)
+                            DiagnosticLine(
+                                "HTTP Threads & Queue",
+                                "${dl.defaultConnectionsPerDownload}x threads • ${dl.maxConcurrentDownloads} parallel"
+                            )
+                            DiagnosticLine(
+                                "Torrent Engine",
+                                if (dl.torrentEnableDht) "libtorrent4j • DHT Active" else "libtorrent4j • DHT Off"
+                            )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onOpenDownloadManager)
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Open Download Manager & Preferences",
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Text(
+                                        text = "Configure speed caps, folders, Wi-Fi rules, User-Agent & BitTorrent options",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText
+                                    )
+                                }
+                                Text(
+                                    text = "Configure",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = sabColors.shieldGreen
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Engine Diagnostics Card
                 item(key = "engine_section") {
-                    SettingsSectionCard(title = "ENGINE ARCHITECTURE & BUILD") {
+                    SettingsSectionCard(title = "ENGINE ARCHITECTURE & LICENSE") {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -675,12 +1015,40 @@ fun SettingsScreen(
                             DiagnosticLine("Device ABI", engineInfo.abi)
                             DiagnosticLine("Android API", "API ${Build.VERSION.SDK_INT} (Android ${Build.VERSION.RELEASE})")
                             DiagnosticLine("sab-bridge Extension", if (engineInfo.builtInExtensionReady) "Loaded" else "Standby")
-                            DiagnosticLine("License", "MIT (Browser Shell) • MPL-2.0 (GeckoView)")
+                            DiagnosticLine("Author & Owner", "Tamal Mitra (Raj-Dev-Lab)")
+                            DiagnosticLine("License", "GNU GPL v3.0 (Strong Copyleft + Attribution)")
                             Text(
                                 text = engineInfo.notes,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = sabColors.subtleText
                             )
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showLicenseDialog = true }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Gavel,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text("View License & Author Attribution", style = MaterialTheme.typography.titleSmall)
+                                }
+                                Text(
+                                    text = "Details",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }
@@ -700,6 +1068,37 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showLicenseDialog) {
+        AlertDialog(
+            onDismissRequest = { showLicenseDialog = false },
+            title = { Text("License & Attribution") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Simple AI Browser (SAB)\nCopyright (c) 2025-2026 Tamal Mitra (Raj-Dev-Lab)",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = "Distributed under GNU GPL v3.0 with Section 7(b) attribution preservation. Any redistribution or derivative work must preserve original author credit to Tamal Mitra (Raj-Dev-Lab), retain LICENSE & NOTICE files, clearly mark modifications, and remain open source under GPL-3.0.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = sabColors.subtleText
+                    )
+                    HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                    Text(
+                        text = "Key Open-Source Components:\n• Mozilla GeckoView (MPL-2.0)\n• libtorrent4j (MIT)\n• OkHttp & Android Jetpack (Apache-2.0)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = sabColors.subtleText
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLicenseDialog = false }) {
+                    Text("Close")
+                }
             }
         )
     }

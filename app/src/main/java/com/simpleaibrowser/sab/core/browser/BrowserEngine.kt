@@ -127,6 +127,120 @@ data class TabIsland(
     val isCollapsed: Boolean = false
 )
 
+enum class TrackingProtectionLevel(val id: String, val displayName: String, val subtitle: String) {
+    OFF("off", "Off", "No tracker blocking (legacy compatibility)"),
+    STANDARD("standard", "Standard", "Blocks ads, analytics, cryptominers & social trackers smoothly"),
+    STRICT("strict", "Strict", "Aggressive tracker, email pixel, social & fingerprint isolation");
+
+    companion object {
+        fun fromId(id: String): TrackingProtectionLevel = entries.firstOrNull { it.id == id } ?: STANDARD
+    }
+}
+
+enum class CookieIsolationMode(val id: String, val displayName: String, val subtitle: String) {
+    TOTAL_ISOLATE(
+        id = "total_isolate",
+        displayName = "Total Cookie Protection",
+        subtitle = "Confines cross-site cookies to per-site jars (dFPI)"
+    ),
+    BLOCK_TRACKERS(
+        id = "block_trackers",
+        displayName = "Block Trackers",
+        subtitle = "Blocks known tracking cookies while allowing benign embeds"
+    ),
+    FIRST_PARTY_ONLY(
+        id = "first_party",
+        displayName = "First-Party Only",
+        subtitle = "Rejects all third-party cookies across sites"
+    ),
+    BLOCK_ALL(
+        id = "block_all",
+        displayName = "Block All Cookies",
+        subtitle = "Rejects every cookie (may break logins)"
+    );
+
+    companion object {
+        fun fromId(id: String): CookieIsolationMode = entries.firstOrNull { it.id == id } ?: TOTAL_ISOLATE
+    }
+}
+
+enum class DnsOverHttpsMode(
+    val id: String,
+    val displayName: String,
+    val resolverUri: String,
+    val subtitle: String
+) {
+    OFF("off", "System DNS", "", "Uses active network / carrier DNS"),
+    CLOUDFLARE(
+        id = "cloudflare",
+        displayName = "Cloudflare (1.1.1.1)",
+        resolverUri = "https://mozilla.cloudflare-dns.com/dns-query",
+        subtitle = "Fast encrypted DoH with 24h zero-retention policy"
+    ),
+    QUAD9(
+        id = "quad9",
+        displayName = "Quad9 Security",
+        resolverUri = "https://dns.quad9.net/dns-query",
+        subtitle = "Encrypted DoH blocking known malware & phishing domains"
+    ),
+    ADGUARD(
+        id = "adguard",
+        displayName = "AdGuard DoH",
+        resolverUri = "https://dns.adguard-dns.com/dns-query",
+        subtitle = "Encrypted DNS with network-level ad & tracker filtering"
+    ),
+    CUSTOM(
+        id = "custom",
+        displayName = "Custom DoH",
+        resolverUri = "",
+        subtitle = "Use your own HTTPS DNS-over-HTTPS endpoint"
+    );
+
+    companion object {
+        fun fromId(id: String): DnsOverHttpsMode = entries.firstOrNull { it.id == id } ?: OFF
+    }
+}
+
+data class PrivacyConfig(
+    val trackingProtectionLevel: TrackingProtectionLevel = TrackingProtectionLevel.STANDARD,
+    val doNotTrackEnabled: Boolean = true,
+    val globalPrivacyControlEnabled: Boolean = true,
+    val cookieIsolationMode: CookieIsolationMode = CookieIsolationMode.TOTAL_ISOLATE,
+    val cookiePurgingEnabled: Boolean = true,
+    val stripTrackingParams: Boolean = true,
+    val bounceTrackingProtection: Boolean = true,
+    val fingerprintingDefense: Boolean = true,
+    val localNetworkProtection: Boolean = true,
+    val safeBrowsingEnabled: Boolean = true,
+    val httpsOnlyEnabled: Boolean = true,
+    val dnsOverHttpsMode: DnsOverHttpsMode = DnsOverHttpsMode.OFF,
+    val customDohUrl: String = "",
+    val dohStrict: Boolean = false
+) {
+    val isProtectionEnabled: Boolean get() = trackingProtectionLevel != TrackingProtectionLevel.OFF
+}
+
+sealed interface SabViewerRequest {
+    val title: String
+
+    data class Pdf(
+        override val title: String,
+        val localFilePath: String? = null,
+        val contentUri: String? = null,
+        val sourceUrl: String? = null,
+        val shareUri: String? = null
+    ) : SabViewerRequest
+
+    data class Media(
+        override val title: String,
+        val uri: String,
+        val isVideo: Boolean,
+        val mimeType: String? = null,
+        val shareUri: String? = null,
+        val fallbackExternalUri: String? = null
+    ) : SabViewerRequest
+}
+
 data class FindInPageResult(
     val currentMatch: Int = 0,
     val totalMatches: Int = 0
@@ -166,7 +280,10 @@ data class DownloadRequest(
     val fileName: String,
     val mimeType: String?,
     val contentLength: Long = -1L,
-    val localUri: String? = null
+    val localUri: String? = null,
+    val sourceType: DownloadSourceType = DownloadSourceType.HTTP,
+    val referrerUrl: String? = null,
+    val stagedCacheFilePath: String? = null
 )
 
 data class ContextMenuTarget(
@@ -374,6 +491,7 @@ interface BrowserTabSession {
     fun attachToView(view: View)
     fun detachFromView(view: View)
     suspend fun extractPageSnapshot(maxChars: Int = 12_000): PageContextSnapshot
+    suspend fun detectPageMedia(): List<DetectedPageMedia> = emptyList()
     fun release()
 }
 
@@ -394,7 +512,11 @@ interface BrowserEngine {
 
     fun setActiveSession(session: BrowserTabSession?) {}
     fun setAdBlockEnabled(enabled: Boolean)
+    fun applyPrivacyConfig(config: PrivacyConfig) {
+        setAdBlockEnabled(config.isProtectionEnabled)
+    }
     fun setPreferredDarkScheme(isDark: Boolean)
     fun clearBrowsingData()
+    fun clearCookiesOnly() { clearBrowsingData() }
     fun clearHistoryAndCachesOnly() { clearBrowsingData() }
 }

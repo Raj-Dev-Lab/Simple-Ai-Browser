@@ -6,8 +6,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
+import com.simpleaibrowser.sab.core.browser.DownloadKind
+import com.simpleaibrowser.sab.core.browser.DownloadManagerSettings
 import com.simpleaibrowser.sab.core.browser.ExtensionSource
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
+import com.simpleaibrowser.sab.core.browser.StorageLocationMode
 import com.simpleaibrowser.sab.data.BrowserPreferences
 import com.simpleaibrowser.sab.data.BrowserRepository
 import com.simpleaibrowser.sab.data.SabDatabase
@@ -51,7 +54,7 @@ class RoomMigrationAndRepoTest {
     }
 
     @Test
-    fun `database migrates cleanly from v1 through v2 to v3 preserving user data`() {
+    fun `database migrates cleanly from v1 through v4 preserving user data`() {
         val dbName = "migration_test_${System.nanoTime()}.db"
         val dbFile = context.getDatabasePath(dbName)
         dbFile.parentFile?.mkdirs()
@@ -85,7 +88,7 @@ class RoomMigrationAndRepoTest {
         helper.close()
 
         val migrated = Room.databaseBuilder(context, SabDatabase::class.java, dbName)
-            .addMigrations(SabDatabase.MIGRATION_1_2, SabDatabase.MIGRATION_2_3)
+            .addMigrations(SabDatabase.MIGRATION_1_2, SabDatabase.MIGRATION_2_3, SabDatabase.MIGRATION_3_4)
             .allowMainThreadQueries()
             .build()
 
@@ -94,18 +97,20 @@ class RoomMigrationAndRepoTest {
             assertEquals(1, bookmarks.size)
             assertEquals("https://mozilla.org", bookmarks.first().url)
 
-            // Verify new v2/v3 tables & columns work cleanly after migration
             migrated.downloadDao().insert(
                 com.simpleaibrowser.sab.data.DownloadEntity(
+                    taskId = "task-migrated-1",
                     systemDownloadId = -1L,
                     fileName = "archive.zip",
                     url = "https://example.com/archive.zip",
-                    localUri = "content://downloads/public_downloads/1"
+                    localUri = "content://downloads/public_downloads/1",
+                    kind = DownloadKind.ARCHIVE.id
                 )
             )
             val downloads = migrated.downloadDao().observeAll().first()
             assertEquals(1, downloads.size)
             assertEquals("content://downloads/public_downloads/1", downloads.first().localUri)
+            assertEquals("task-migrated-1", downloads.first().taskId)
 
             migrated.extensionRecordDao().upsert(
                 com.simpleaibrowser.sab.data.ExtensionRecordEntity(
@@ -117,6 +122,64 @@ class RoomMigrationAndRepoTest {
                 )
             )
             assertNotNull(migrated.extensionRecordDao().findById("ext@test"))
+        }
+
+        migrated.close()
+        File(dbFile.path).delete()
+    }
+
+    @Test
+    fun `database migrates v3 downloads table to v4 backfilling taskId downloadedBytes and completedAt`() {
+        val dbName = "migration_v3_v4_${System.nanoTime()}.db"
+        val dbFile = context.getDatabasePath(dbName)
+        dbFile.parentFile?.mkdirs()
+
+        val callbackV3 = object : SupportSQLiteOpenHelper.Callback(3) {
+            override fun onCreate(db: SupportSQLiteDatabase) {
+                SabDatabase.MIGRATION_1_2.migrate(db)
+                SabDatabase.MIGRATION_2_3.migrate(db)
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `speed_dials` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `accentHex` INTEGER NOT NULL, `position` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `bookmarks` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `folder` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `history` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `visitedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `downloads` (`systemDownloadId`, `fileName`, `url`, `mimeType`, `sizeBytes`, `createdAt`, `localUri`)
+                    VALUES (42, 'ubuntu.iso', 'https://releases.ubuntu.com/ubuntu.iso', 'application/octet-stream', 4096, 987654, 'content://downloads/42')
+                    """.trimIndent()
+                )
+            }
+
+            override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+        }
+
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(callbackV3)
+                .build()
+        )
+        helper.writableDatabase.close()
+        helper.close()
+
+        val migrated = Room.databaseBuilder(context, SabDatabase::class.java, dbName)
+            .addMigrations(SabDatabase.MIGRATION_3_4)
+            .allowMainThreadQueries()
+            .build()
+
+        runBlocking {
+            val all = migrated.downloadDao().getAll()
+            assertEquals(1, all.size)
+            val row = all.first()
+            assertTrue(row.taskId.startsWith("legacy-"))
+            assertEquals(4096L, row.downloadedBytes)
+            assertEquals(987654L, row.completedAt)
+            assertEquals("completed", row.status)
         }
 
         migrated.close()
@@ -187,5 +250,50 @@ class RoomMigrationAndRepoTest {
         assertFalse(updated.autoUpdateExtensions)
         assertEquals(160, updated.defaultTextZoom)
         assertEquals(123456789L, updated.lastExtensionUpdateCheckAt)
+    }
+
+    @Test
+    fun `download manager preferences persist and clamp bounds cleanly`() = runBlocking {
+        preferences.updateDownloadSettings {
+            DownloadManagerSettings(
+                askBeforeDownloading = true,
+                defaultConnectionsPerDownload = 64,
+                maxConcurrentDownloads = 99,
+                wifiOnlyDownloads = true,
+                speedLimitKbps = 2048,
+                autoResumeOnReconnect = false,
+                storageLocationMode = StorageLocationMode.CUSTOM_TREE,
+                customTreeUri = "content://com.android.externalstorage.documents/tree/primary%3AMovies",
+                customTreeLabel = "Movies",
+                autoOrganizeByType = true,
+                notifyOnComplete = false,
+                torrentSequentialDefault = true,
+                torrentSeedAfterComplete = true,
+                torrentMaxConnections = 999,
+                torrentDownloadLimitKbps = 4096,
+                torrentUploadLimitKbps = 256,
+                torrentEnableDht = false,
+                customUserAgent = "SAB-Downloader/1.4"
+            )
+        }
+
+        val loaded = preferences.settingsFlow.first().downloadSettings
+        assertTrue(loaded.askBeforeDownloading)
+        assertEquals(16, loaded.defaultConnectionsPerDownload)
+        assertEquals(6, loaded.maxConcurrentDownloads)
+        assertTrue(loaded.wifiOnlyDownloads)
+        assertEquals(2048, loaded.speedLimitKbps)
+        assertFalse(loaded.autoResumeOnReconnect)
+        assertEquals(StorageLocationMode.CUSTOM_TREE, loaded.storageLocationMode)
+        assertEquals("Movies", loaded.customTreeLabel)
+        assertTrue(loaded.autoOrganizeByType)
+        assertFalse(loaded.notifyOnComplete)
+        assertTrue(loaded.torrentSequentialDefault)
+        assertTrue(loaded.torrentSeedAfterComplete)
+        assertEquals(500, loaded.torrentMaxConnections)
+        assertEquals(4096, loaded.torrentDownloadLimitKbps)
+        assertEquals(256, loaded.torrentUploadLimitKbps)
+        assertFalse(loaded.torrentEnableDht)
+        assertEquals("SAB-Downloader/1.4", loaded.customUserAgent)
     }
 }

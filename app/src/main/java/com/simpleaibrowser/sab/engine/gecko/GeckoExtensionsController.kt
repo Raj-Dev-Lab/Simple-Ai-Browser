@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.json.JSONObject
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
@@ -60,6 +61,15 @@ class GeckoExtensionsController(
     @Volatile
     var builtInExtension: WebExtension? = null
         private set
+
+    @Volatile
+    private var backgroundPort: WebExtension.Port? = null
+
+    @Volatile
+    private var pendingDoNotTrack: Boolean = true
+
+    @Volatile
+    private var pendingGpc: Boolean = true
 
     private val _installedExtensions = MutableStateFlow<List<InstalledExtensionInfo>>(emptyList())
     override val installedExtensions: StateFlow<List<InstalledExtensionInfo>> = _installedExtensions.asStateFlow()
@@ -115,9 +125,57 @@ class GeckoExtensionsController(
     private fun publishBuiltInReady(ext: WebExtension) {
         builtInExtension = ext
         rawExtensions[ext.id] = ext
+        attachBuiltInBackgroundDelegate(ext)
         onBuiltInReady(ext)
         readyListeners.forEach { listener -> runCatching { listener(ext) } }
         scope.launch { refreshInstalled() }
+    }
+
+    fun updatePrivacyHeaders(doNotTrack: Boolean, globalPrivacyControl: Boolean) {
+        pendingDoNotTrack = doNotTrack
+        pendingGpc = globalPrivacyControl
+        pushPrivacyConfigToBackground()
+    }
+
+    private fun attachBuiltInBackgroundDelegate(ext: WebExtension) {
+        runOnMain {
+            runCatching {
+                ext.setMessageDelegate(
+                    object : WebExtension.MessageDelegate {
+                        override fun onConnect(port: WebExtension.Port) {
+                            backgroundPort = port
+                            port.setDelegate(object : WebExtension.PortDelegate {
+                                override fun onPortMessage(message: Any, port: WebExtension.Port) = Unit
+                                override fun onDisconnect(port: WebExtension.Port) {
+                                    if (backgroundPort === port) {
+                                        backgroundPort = null
+                                    }
+                                }
+                            })
+                            pushPrivacyConfigToBackground()
+                        }
+                    },
+                    SAB_NATIVE_APP
+                )
+            }.onFailure { err ->
+                Log.w(EXT_TAG, "Failed attaching sab-bridge background delegate: ${err.message}")
+            }
+        }
+    }
+
+    private fun pushPrivacyConfigToBackground() {
+        val port = backgroundPort ?: return
+        runOnMain {
+            runCatching {
+                port.postMessage(
+                    JSONObject().apply {
+                        put("type", "PRIVACY_CONFIG")
+                        put("doNotTrack", pendingDoNotTrack)
+                        put("globalPrivacyControl", pendingGpc)
+                    }
+                )
+            }
+        }
     }
 
     private fun installControllerDelegates() {

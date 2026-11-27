@@ -1,18 +1,18 @@
 package com.simpleaibrowser.sab.engine.gecko
 
-import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
-import android.provider.MediaStore
 import android.util.Log
 import android.view.View
 import androidx.core.content.ContextCompat
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
 import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
+import com.simpleaibrowser.sab.core.browser.DetectedPageMedia
+import com.simpleaibrowser.sab.core.browser.DownloadKind
 import com.simpleaibrowser.sab.core.browser.DownloadRequest
+import com.simpleaibrowser.sab.core.browser.DownloadSourceType
 import com.simpleaibrowser.sab.core.browser.FindInPageResult
 import com.simpleaibrowser.sab.core.browser.PageContextSnapshot
 import com.simpleaibrowser.sab.core.browser.PromptChoiceOption
@@ -22,6 +22,7 @@ import com.simpleaibrowser.sab.core.browser.SessionCallbacks
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
+import com.simpleaibrowser.sab.downloads.DownloadFileSystem
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,8 @@ import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.PageExtractionController
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebResponse
+import java.io.File
+import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -98,7 +101,14 @@ class GeckoTabSession(
     @Volatile
     private var recoveryAttempts = 0
 
+    @Volatile
+    private var doNotTrackSignal: Boolean = true
+
+    @Volatile
+    private var gpcSignal: Boolean = true
+
     private val pendingSnapshotRequests = ConcurrentHashMap<String, CompletableDeferred<PageContextSnapshot>>()
+    private val pendingMediaRequests = ConcurrentHashMap<String, CompletableDeferred<List<DetectedPageMedia>>>()
 
     init {
         installDelegates()
@@ -111,6 +121,17 @@ class GeckoTabSession(
     }
 
     internal fun geckoSessionRef(): GeckoSession = geckoSession
+
+    internal fun applyPrivacySignals(
+        useTrackingProtection: Boolean,
+        doNotTrack: Boolean,
+        globalPrivacyControl: Boolean
+    ) {
+        doNotTrackSignal = doNotTrack
+        gpcSignal = globalPrivacyControl
+        runCatching { geckoSession.settings.useTrackingProtection = useTrackingProtection }
+        syncBridgeModes()
+    }
 
     private fun ensureSessionOpened() {
         if (!isOpened && !isReleased) {
@@ -150,6 +171,18 @@ class GeckoTabSession(
                 request: GeckoSession.NavigationDelegate.LoadRequest
             ): GeckoResult<AllowOrDeny> {
                 val uri = request.uri
+                if (uri.startsWith("magnet:", ignoreCase = true)) {
+                    callbacks.onDownloadRequested(
+                        DownloadRequest(
+                            url = uri,
+                            fileName = UrlResolver.guessFileName(uri, "application/x-bittorrent"),
+                            mimeType = "application/x-bittorrent",
+                            sourceType = DownloadSourceType.MAGNET,
+                            referrerUrl = _state.value.url
+                        )
+                    )
+                    return GeckoResult.fromValue(AllowOrDeny.DENY)
+                }
                 if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW &&
                     (uri.startsWith("http://") || uri.startsWith("https://"))
                 ) {
@@ -300,6 +333,9 @@ class GeckoTabSession(
         }?.value
         val fileName = disposition?.let { parseDispositionFileName(it) }
             ?: UrlResolver.guessFileName(uri, mimeType)
+        val referrer = _state.value.url.takeIf { it.startsWith("http") }
+        val isTorrent = mimeType.equals("application/x-bittorrent", ignoreCase = true) ||
+            fileName.endsWith(".torrent", ignoreCase = true)
 
         val bodyStream = response.body
         if (bodyStream == null) {
@@ -308,67 +344,58 @@ class GeckoTabSession(
                     url = uri,
                     fileName = fileName,
                     mimeType = mimeType,
-                    contentLength = contentLength
+                    contentLength = contentLength,
+                    sourceType = DownloadSourceType.HTTP,
+                    referrerUrl = referrer
                 )
             )
             return
         }
 
-        // Stream already-open WebResponse body (supports blob:/POST/authenticated downloads)
+        // Stream already-open WebResponse body into SAB staging vault (supports blob:/POST/auth/torrent responses)
         sessionScope.launch {
-            val savedResult = runCatching {
+            val fileSystem = DownloadFileSystem(appContext)
+            val safeName = DownloadFileSystem.sanitizeFileName(fileName)
+            val stagedFile = File(fileSystem.metadataDir(), "stream_${System.currentTimeMillis()}_$safeName")
+            val stagedResult = runCatching {
                 bodyStream.use { input ->
-                    val resolver = appContext.contentResolver
-                    val values = ContentValues().apply {
-                        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                        put(MediaStore.Downloads.MIME_TYPE, mimeType ?: "application/octet-stream")
-                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                        put(MediaStore.Downloads.IS_PENDING, 1)
-                    }
-                    val targetUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                        ?: error("Could not create Download file")
                     var bytesWritten = 0L
-                    try {
-                        resolver.openOutputStream(targetUri)?.use { out ->
-                            val buf = ByteArray(16 * 1024)
-                            while (true) {
-                                val read = input.read(buf)
-                                if (read <= 0) break
-                                out.write(buf, 0, read)
-                                bytesWritten += read
-                            }
-                            out.flush()
-                        } ?: error("Could not open Download output stream")
-
-                        val doneValues = ContentValues().apply {
-                            put(MediaStore.Downloads.IS_PENDING, 0)
+                    FileOutputStream(stagedFile).use { out ->
+                        val buf = ByteArray(32 * 1024)
+                        while (true) {
+                            val read = input.read(buf)
+                            if (read <= 0) break
+                            out.write(buf, 0, read)
+                            bytesWritten += read
                         }
-                        resolver.update(targetUri, doneValues, null, null)
-                        targetUri.toString() to bytesWritten
-                    } catch (t: Throwable) {
-                        runCatching { resolver.delete(targetUri, null, null) }
-                        throw t
+                        out.flush()
                     }
+                    bytesWritten
                 }
             }
-            savedResult.onSuccess { (localUri, bytesWritten) ->
+            stagedResult.onSuccess { bytesWritten ->
                 callbacks.onDownloadRequested(
                     DownloadRequest(
                         url = uri,
-                        fileName = fileName,
+                        fileName = safeName,
                         mimeType = mimeType,
                         contentLength = if (bytesWritten > 0L) bytesWritten else contentLength,
-                        localUri = localUri
+                        sourceType = if (isTorrent) DownloadSourceType.TORRENT_FILE else DownloadSourceType.OPEN_STREAM,
+                        referrerUrl = referrer,
+                        stagedCacheFilePath = stagedFile.absolutePath
                     )
                 )
             }.onFailure { err ->
-                Log.w(SESSION_TAG, "Streaming response body failed (${err.message}); falling back to DownloadManager")
+                runCatching { stagedFile.delete() }
+                Log.w(SESSION_TAG, "Streaming response body failed (${err.message}); falling back to HTTP Download Manager")
                 callbacks.onDownloadRequested(
                     DownloadRequest(
                         url = uri,
-                        fileName = fileName,
+                        fileName = safeName,
                         mimeType = mimeType,
-                        contentLength = contentLength
+                        contentLength = contentLength,
+                        sourceType = DownloadSourceType.HTTP,
+                        referrerUrl = referrer
                     )
                 )
             }
@@ -861,17 +888,49 @@ class GeckoTabSession(
                     port.setDelegate(object : WebExtension.PortDelegate {
                         override fun onPortMessage(message: Any, port: WebExtension.Port) {
                             val obj = message as? JSONObject ?: return
-                            if (obj.optString("type") == "SNAPSHOT_RESULT") {
-                                val reqId = obj.optString("requestId")
-                                val deferred = pendingSnapshotRequests.remove(reqId) ?: return
-                                deferred.complete(
-                                    PageContextSnapshot(
-                                        url = obj.optString("url", _state.value.url),
-                                        title = obj.optString("title", _state.value.title),
-                                        textContent = obj.optString("text", ""),
-                                        selectedText = obj.optString("selection").takeIf { it.isNotBlank() }
+                            when (obj.optString("type")) {
+                                "SNAPSHOT_RESULT" -> {
+                                    val reqId = obj.optString("requestId")
+                                    val deferred = pendingSnapshotRequests.remove(reqId) ?: return
+                                    val data = obj.optJSONObject("payload") ?: obj
+                                    deferred.complete(
+                                        PageContextSnapshot(
+                                            url = data.optString("url", _state.value.url),
+                                            title = data.optString("title", _state.value.title),
+                                            textContent = data.optString("textContent", data.optString("text", "")),
+                                            selectedText = data.optString("selectedText", data.optString("selection"))
+                                                .takeIf { it.isNotBlank() }
+                                        )
                                     )
-                                )
+                                }
+                                "MEDIA_SCAN_RESULT" -> {
+                                    val reqId = obj.optString("requestId")
+                                    val deferred = pendingMediaRequests.remove(reqId) ?: return
+                                    val arr = obj.optJSONArray("items")
+                                    val list = buildList {
+                                        if (arr != null) {
+                                            for (i in 0 until arr.length()) {
+                                                val item = arr.optJSONObject(i) ?: continue
+                                                val mediaUrl = item.optString("url")
+                                                if (mediaUrl.isBlank()) continue
+                                                val rawMime = item.optString("mimeType").takeIf { it.isNotBlank() }
+                                                val inferredKind = DownloadKind.infer(mediaUrl, rawMime, mediaUrl)
+                                                val explicitKind = item.optString("kind").takeIf { it.isNotBlank() }
+                                                    ?.let { DownloadKind.fromId(it) }
+                                                    ?: inferredKind
+                                                add(
+                                                    DetectedPageMedia(
+                                                        url = mediaUrl,
+                                                        title = item.optString("title", mediaUrl),
+                                                        kind = explicitKind,
+                                                        mimeType = rawMime
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                    deferred.complete(list)
+                                }
                             }
                         }
 
@@ -899,6 +958,8 @@ class GeckoTabSession(
                         put("forceDark", current.forceDarkMode)
                         put("readerMode", current.readerMode)
                         put("textZoom", current.textZoomPercent)
+                        put("doNotTrack", doNotTrackSignal)
+                        put("globalPrivacyControl", gpcSignal)
                     }
                 )
             }.onFailure { err ->
@@ -1117,11 +1178,38 @@ class GeckoTabSession(
         )
     }
 
+    override suspend fun detectPageMedia(): List<DetectedPageMedia> {
+        val port = nativePort ?: return emptyList()
+        val reqId = UUID.randomUUID().toString()
+        val deferred = CompletableDeferred<List<DetectedPageMedia>>()
+        pendingMediaRequests[reqId] = deferred
+        runOnMain {
+            runCatching {
+                port.postMessage(
+                    JSONObject().apply {
+                        put("type", "SCAN_PAGE_MEDIA")
+                        put("requestId", reqId)
+                    }
+                )
+            }.onFailure {
+                pendingMediaRequests.remove(reqId)
+                deferred.complete(emptyList())
+            }
+        }
+        val items = runCatching {
+            withTimeoutOrNull(2_200L) { deferred.await() }
+        }.getOrNull().orEmpty()
+        pendingMediaRequests.remove(reqId)
+        return items
+    }
+
     override fun release() {
         isReleased = true
         nativePort = null
         pendingSnapshotRequests.values.forEach { it.cancel() }
         pendingSnapshotRequests.clear()
+        pendingMediaRequests.values.forEach { it.cancel() }
+        pendingMediaRequests.clear()
         sessionScope.cancel()
         if (isOpened) {
             runCatching { geckoSession.close() }

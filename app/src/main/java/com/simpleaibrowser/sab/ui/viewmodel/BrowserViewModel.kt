@@ -1,29 +1,34 @@
 package com.simpleaibrowser.sab.ui.viewmodel
 
 import android.app.Application
-import android.app.DownloadManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
-import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
 import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
+import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
+import com.simpleaibrowser.sab.core.browser.DetectedPageMedia
+import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
+import com.simpleaibrowser.sab.core.browser.DownloadManagerSettings
 import com.simpleaibrowser.sab.core.browser.DownloadRequest
+import com.simpleaibrowser.sab.core.browser.DownloadSourceType
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.FindInPageResult
 import com.simpleaibrowser.sab.core.browser.IslandColor
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
+import com.simpleaibrowser.sab.core.browser.SabViewerRequest
 import com.simpleaibrowser.sab.core.browser.SearchEngine
 import com.simpleaibrowser.sab.core.browser.SessionCallbacks
+import com.simpleaibrowser.sab.core.browser.StorageLocationMode
 import com.simpleaibrowser.sab.core.browser.TabIsland
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.ThemePreset
+import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.data.BookmarkEntity
@@ -62,6 +67,7 @@ sealed interface BrowserOverlay {
     data object OperaMenu : BrowserOverlay
     data object ShieldSheet : BrowserOverlay
     data class Library(val initialTab: LibraryTab = LibraryTab.BOOKMARKS) : BrowserOverlay
+    data class DownloadManager(val initialTab: DownloadManagerTab = DownloadManagerTab.ALL) : BrowserOverlay
     data object Settings : BrowserOverlay
     data object AddSpeedDial : BrowserOverlay
     data class Extensions(val initialTab: ExtensionsTab = ExtensionsTab.AMO) : BrowserOverlay
@@ -71,6 +77,13 @@ enum class LibraryTab {
     BOOKMARKS,
     HISTORY,
     DOWNLOADS
+}
+
+enum class DownloadManagerTab {
+    ALL,
+    TORRENTS,
+    MEDIA,
+    FILES
 }
 
 data class ClosedTabRecord(
@@ -174,10 +187,20 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
+    private val _activeViewer = MutableStateFlow<SabViewerRequest?>(null)
+    val activeViewer: StateFlow<SabViewerRequest?> = _activeViewer.asStateFlow()
+
     val extensions = ExtensionStoreCoordinator(
         scope = viewModelScope,
         repository = repository,
         controller = engine.extensionsController,
+        onToast = { showToast(it) }
+    )
+
+    val downloadManager = DownloadManagerCoordinator(
+        context = application.applicationContext,
+        scope = viewModelScope,
+        repository = repository,
         onToast = { showToast(it) }
     )
 
@@ -259,7 +282,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch {
             settings.collect { pref ->
-                engine.setAdBlockEnabled(pref.adBlockEnabled)
+                engine.applyPrivacyConfig(pref.toPrivacyConfig())
                 engine.setPreferredDarkScheme(pref.themePreset.isDark)
             }
         }
@@ -429,10 +452,73 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun handleIncomingExternalUri(uri: String?) {
         if (uri.isNullOrBlank()) return
+        val trimmed = uri.trim()
+        if (trimmed.startsWith("magnet:", ignoreCase = true)) {
+            downloadManager.handleBrowserDownloadRequest(
+                DownloadRequest(
+                    url = trimmed,
+                    fileName = UrlResolver.guessFileName(trimmed, "application/x-bittorrent"),
+                    mimeType = "application/x-bittorrent",
+                    sourceType = DownloadSourceType.MAGNET
+                )
+            )
+            openOverlay(BrowserOverlay.DownloadManager(DownloadManagerTab.TORRENTS))
+            return
+        }
+        if (trimmed.startsWith("content://", ignoreCase = true) ||
+            trimmed.startsWith("file://", ignoreCase = true)
+        ) {
+            runCatching { Uri.parse(trimmed) }.getOrNull()?.let { parsed ->
+                downloadManager.startTorrentFromPickedUri(parsed)
+                openOverlay(BrowserOverlay.DownloadManager(DownloadManagerTab.TORRENTS))
+            }
+            return
+        }
         viewModelScope.launch {
             hydrationJob.join()
-            val resolved = UrlResolver.resolve(uri, settings.value.searchEngine, settings.value.httpsOnlyEnabled)
+            val resolved = prepareNavigableUrl(trimmed)
             createNewTab(isPrivate = false, initialUrl = resolved, select = true)
+        }
+    }
+
+    private fun prepareNavigableUrl(rawOrUrl: String): String {
+        val current = settings.value
+        val resolved = UrlResolver.resolve(rawOrUrl, current.searchEngine, current.httpsOnlyEnabled)
+        return if (current.stripTrackingParams) {
+            UrlResolver.stripTrackingParameters(resolved)
+        } else {
+            resolved
+        }
+    }
+
+    fun openViewer(request: SabViewerRequest) {
+        _activeViewer.value = request
+    }
+
+    fun closeViewer() {
+        _activeViewer.value = null
+    }
+
+    fun openDetectedMediaInViewer(media: DetectedPageMedia) {
+        val url = media.url.trim()
+        if (UrlResolver.isPdfTarget(url, media.mimeType)) {
+            openViewer(SabViewerRequest.Pdf(title = media.title.ifBlank { UrlResolver.guessFileName(url, media.mimeType) }, sourceUrl = url, shareUri = url))
+            return
+        }
+        val (isMedia, isVideo) = UrlResolver.classifyPlayableMedia(url, media.mimeType)
+        if (isMedia) {
+            openViewer(
+                SabViewerRequest.Media(
+                    title = media.title.ifBlank { UrlResolver.extractHost(url) },
+                    uri = url,
+                    isVideo = isVideo,
+                    mimeType = media.mimeType,
+                    shareUri = url,
+                    fallbackExternalUri = url
+                )
+            )
+        } else {
+            navigateToUrl(url)
         }
     }
 
@@ -519,11 +605,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun openLinkInNewTab(url: String, inIsland: Boolean = false, isPrivate: Boolean = false) {
         _contextMenuTarget.value = null
+        val prepared = prepareNavigableUrl(url)
         val currentId = _activeTabId.value.takeIf { it.isNotBlank() }
         if (inIsland && !isPrivate && currentId != null) {
-            createChildTabInIsland(url = url, parentTabId = currentId, isPrivate = false)
+            createChildTabInIsland(url = prepared, parentTabId = currentId, isPrivate = false)
         } else {
-            createNewTab(isPrivate = isPrivate, initialUrl = url, select = true)
+            createNewTab(isPrivate = isPrivate, initialUrl = prepared, select = true)
         }
     }
 
@@ -533,107 +620,55 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         showToast("Copied $label")
     }
 
+    fun copyCleanUrlToClipboard(rawUrl: String) {
+        val cleaned = UrlResolver.stripTrackingParameters(rawUrl)
+        copyTextToClipboard("clean link", cleaned)
+    }
+
     fun downloadUrl(url: String) {
         _contextMenuTarget.value = null
+        val isMagnet = url.trim().startsWith("magnet:", ignoreCase = true)
         enqueueDownload(
             DownloadRequest(
                 url = url,
-                fileName = UrlResolver.guessFileName(url, null),
-                mimeType = null,
-                contentLength = -1L
+                fileName = UrlResolver.guessFileName(url, if (isMagnet) "application/x-bittorrent" else null),
+                mimeType = if (isMagnet) "application/x-bittorrent" else null,
+                contentLength = -1L,
+                sourceType = if (isMagnet) DownloadSourceType.MAGNET else DownloadSourceType.HTTP,
+                referrerUrl = activeTab.value.url.takeIf { it.startsWith("http") }
             )
         )
     }
 
     fun enqueueDownload(request: DownloadRequest) {
-        if (!request.localUri.isNullOrBlank()) {
-            viewModelScope.launch {
-                repository.recordDownload(
-                    systemDownloadId = -1L,
-                    fileName = request.fileName,
-                    url = request.url,
-                    mimeType = request.mimeType,
-                    sizeBytes = request.contentLength,
-                    localUri = request.localUri
-                )
-            }
-            showToast("Saved ${request.fileName} to Downloads")
-            return
-        }
-
-        val uri = runCatching { Uri.parse(request.url) }.getOrNull()
-        val scheme = uri?.scheme?.lowercase()
-        if (uri == null || (scheme != "http" && scheme != "https")) {
-            showToast("Unsupported download link")
-            return
-        }
-        runCatching {
-            val dm = getApplication<Application>().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val dmRequest = DownloadManager.Request(uri)
-                .setTitle(request.fileName)
-                .setDescription("Downloading via Simple AI Browser")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, request.fileName)
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(true)
-            if (!request.mimeType.isNullOrBlank()) {
-                dmRequest.setMimeType(request.mimeType)
-            }
-            val downloadId = dm.enqueue(dmRequest)
-            viewModelScope.launch {
-                repository.recordDownload(
-                    systemDownloadId = downloadId,
-                    fileName = request.fileName,
-                    url = request.url,
-                    mimeType = request.mimeType,
-                    sizeBytes = request.contentLength,
-                    localUri = null
-                )
-            }
-            showToast("Downloading ${request.fileName}")
-        }.onFailure {
-            showToast("Download could not start")
-        }
+        downloadManager.handleBrowserDownloadRequest(request)
     }
 
     fun openDownloadedFile(context: Context, item: DownloadEntity) {
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-        val fileUri = item.localUri?.takeIf { it.isNotBlank() }?.let { raw ->
-            runCatching { Uri.parse(raw) }.getOrNull()
-        } ?: runCatching {
-            if (item.systemDownloadId > 0L) dm?.getUriForDownloadedFile(item.systemDownloadId) else null
-        }.getOrNull()
-        if (fileUri != null) {
-            val mime = (if (item.systemDownloadId > 0L) dm?.getMimeTypeForDownloadedFile(item.systemDownloadId) else null)
-                ?: item.mimeType
-            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(fileUri, mime.ifBlank { "*/*" })
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            val launched = runCatching { context.startActivity(viewIntent) }.isSuccess
-            if (launched) return
+        downloadManager.openDownloadedFile(context, item) { viewerRequest ->
+            openViewer(viewerRequest)
         }
-        val fallback = runCatching {
-            context.startActivity(
-                Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            )
-        }.isSuccess
-        if (!fallback) {
-            showToast("File is in your Android Downloads folder")
+    }
+
+    fun openVaultFile(context: Context, entry: com.simpleaibrowser.sab.core.browser.SabFileEntry) {
+        downloadManager.openVaultFile(context, entry) { viewerRequest ->
+            openViewer(viewerRequest)
         }
     }
 
     fun deleteDownloadRecord(id: Long) {
-        viewModelScope.launch { repository.deleteDownloadRecord(id) }
+        viewModelScope.launch {
+            val found = repository.getAllDownloads().firstOrNull { it.id == id }
+            if (found != null) {
+                downloadManager.deleteDownloadRecord(found, deleteFiles = false)
+            } else {
+                repository.deleteDownloadRecord(id)
+            }
+        }
     }
 
     fun clearDownloads() {
-        viewModelScope.launch {
-            repository.clearDownloads()
-            showToast("Cleared downloads list")
-        }
+        downloadManager.clearFinished()
     }
 
     private fun createChildTabInIsland(url: String, parentTabId: String, isPrivate: Boolean) {
@@ -809,11 +844,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun submitOmnibox(rawInput: String = _omniboxQuery.value) {
-        val resolved = UrlResolver.resolve(
-            rawInput = rawInput,
-            searchEngine = settings.value.searchEngine,
-            httpsOnly = settings.value.httpsOnlyEnabled
-        )
+        val resolved = prepareNavigableUrl(rawInput)
         _isOmniboxEditing.value = false
         _overlay.value = BrowserOverlay.None
         if (resolved == SAB_START_URL) {
@@ -826,7 +857,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun navigateToUrl(url: String) {
         _isOmniboxEditing.value = false
         _overlay.value = BrowserOverlay.None
-        val resolved = UrlResolver.resolve(url, settings.value.searchEngine, settings.value.httpsOnlyEnabled)
+        val resolved = prepareNavigableUrl(url)
         activeSession.value?.loadUrl(resolved)
     }
 
@@ -984,6 +1015,13 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun clearCookiesAndSiteDataOnly() {
+        viewModelScope.launch {
+            engine.clearCookiesOnly()
+            showToast("Site cookies & DOM storage purged")
+        }
+    }
+
     fun clearAllBrowsingData() {
         viewModelScope.launch {
             repository.clearHistory()
@@ -994,11 +1032,84 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun handleAppExitCleanup() {
+        if (settings.value.clearPrivateDataOnExit) {
+            runCatching { engine.clearCookiesOnly() }
+            viewModelScope.launch {
+                repository.clearHistory()
+                engine.clearHistoryAndCachesOnly()
+            }
+        }
+    }
+
     fun setAdBlockEnabled(enabled: Boolean) {
         viewModelScope.launch {
             repository.setAdBlockEnabled(enabled)
             showToast(if (enabled) "Privacy Shield enabled" else "Privacy Shield paused")
         }
+    }
+
+    fun setTrackingProtectionLevel(level: TrackingProtectionLevel) {
+        viewModelScope.launch {
+            repository.setTrackingProtectionLevel(level)
+            showToast("Tracking protection: ${level.displayName}")
+        }
+    }
+
+    fun setDoNotTrackEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setDoNotTrackEnabled(enabled)
+            showToast(if (enabled) "DNT: 1 header active" else "Do Not Track header disabled")
+        }
+    }
+
+    fun setGlobalPrivacyControlEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setGlobalPrivacyControlEnabled(enabled)
+            showToast(if (enabled) "Global Privacy Control (Sec-GPC) active" else "GPC signal disabled")
+        }
+    }
+
+    fun setCookieIsolationMode(mode: CookieIsolationMode) {
+        viewModelScope.launch {
+            repository.setCookieIsolationMode(mode)
+            showToast("Cookies: ${mode.displayName}")
+        }
+    }
+
+    fun setCookiePurgingEnabled(enabled: Boolean) {
+        viewModelScope.launch { repository.setCookiePurgingEnabled(enabled) }
+    }
+
+    fun setStripTrackingParams(enabled: Boolean) {
+        viewModelScope.launch { repository.setStripTrackingParams(enabled) }
+    }
+
+    fun setBounceTrackingProtection(enabled: Boolean) {
+        viewModelScope.launch { repository.setBounceTrackingProtection(enabled) }
+    }
+
+    fun setFingerprintingDefense(enabled: Boolean) {
+        viewModelScope.launch { repository.setFingerprintingDefense(enabled) }
+    }
+
+    fun setLocalNetworkProtection(enabled: Boolean) {
+        viewModelScope.launch { repository.setLocalNetworkProtection(enabled) }
+    }
+
+    fun setSafeBrowsingEnabled(enabled: Boolean) {
+        viewModelScope.launch { repository.setSafeBrowsingEnabled(enabled) }
+    }
+
+    fun setDnsOverHttpsConfig(mode: DnsOverHttpsMode, customUrl: String, strict: Boolean) {
+        viewModelScope.launch {
+            repository.setDnsOverHttpsConfig(mode, customUrl, strict)
+            showToast("Encrypted DNS: ${mode.displayName}")
+        }
+    }
+
+    fun setClearPrivateDataOnExit(enabled: Boolean) {
+        viewModelScope.launch { repository.setClearPrivateDataOnExit(enabled) }
     }
 
     fun setHttpsOnlyEnabled(enabled: Boolean) {
@@ -1055,8 +1166,28 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun updateDownloadSettings(transform: (DownloadManagerSettings) -> DownloadManagerSettings) {
+        viewModelScope.launch {
+            repository.updateDownloadSettings(transform)
+        }
+    }
+
+    fun clearCustomDownloadFolder() {
+        viewModelScope.launch {
+            repository.updateDownloadSettings { current ->
+                current.copy(
+                    storageLocationMode = StorageLocationMode.PUBLIC_DOWNLOADS,
+                    customTreeUri = null,
+                    customTreeLabel = null
+                )
+            }
+            showToast("Reset download location to Android Downloads")
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        downloadManager.release()
         synchronized(promptQueue) {
             _activePrompt.value?.cancelSilently()
             _activePrompt.value = null

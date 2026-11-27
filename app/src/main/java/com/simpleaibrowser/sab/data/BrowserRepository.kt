@@ -1,12 +1,16 @@
 package com.simpleaibrowser.sab.data
 
 import com.simpleaibrowser.sab.core.browser.AddressBarPosition
+import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
+import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
+import com.simpleaibrowser.sab.core.browser.DownloadManagerSettings
 import com.simpleaibrowser.sab.core.browser.ExtensionSource
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SearchEngine
 import com.simpleaibrowser.sab.core.browser.TabIsland
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.ThemePreset
+import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import kotlinx.coroutines.flow.Flow
 
 class BrowserRepository(
@@ -118,14 +122,102 @@ class BrowserRepository(
                 url = url,
                 mimeType = mimeType ?: "application/octet-stream",
                 sizeBytes = sizeBytes,
+                downloadedBytes = sizeBytes.coerceAtLeast(0L),
                 createdAt = System.currentTimeMillis(),
-                localUri = localUri
+                completedAt = System.currentTimeMillis(),
+                localUri = localUri,
+                publicUri = localUri,
+                status = "completed"
             )
         )
     }
 
+    suspend fun upsertDownloadTask(entity: DownloadEntity): Long =
+        database.downloadDao().insert(entity)
+
+    suspend fun getAllDownloads(): List<DownloadEntity> =
+        database.downloadDao().getAll()
+
+    suspend fun findDownloadByTaskId(taskId: String): DownloadEntity? =
+        database.downloadDao().findByTaskId(taskId)
+
+    suspend fun findDownloadByInfoHash(infoHash: String): DownloadEntity? =
+        database.downloadDao().findByInfoHash(infoHash)
+
+    suspend fun updateDownloadRuntimeState(
+        taskId: String,
+        fileName: String,
+        sizeBytes: Long,
+        downloadedBytes: Long,
+        speedBytesPerSec: Long,
+        etaSeconds: Long,
+        status: String,
+        supportsRange: Boolean,
+        etag: String?,
+        segmentsJson: String?,
+        torrentPeers: Int,
+        torrentSeeds: Int,
+        torrentFilesJson: String?,
+        torrentInfoHash: String?,
+        errorMessage: String?
+    ) = database.downloadDao().updateRuntimeState(
+        taskId = taskId,
+        fileName = fileName,
+        sizeBytes = sizeBytes,
+        downloadedBytes = downloadedBytes,
+        speedBytesPerSec = speedBytesPerSec,
+        etaSeconds = etaSeconds,
+        status = status,
+        supportsRange = supportsRange,
+        etag = etag,
+        segmentsJson = segmentsJson,
+        torrentPeers = torrentPeers,
+        torrentSeeds = torrentSeeds,
+        torrentFilesJson = torrentFilesJson,
+        torrentInfoHash = torrentInfoHash,
+        errorMessage = errorMessage
+    )
+
+    suspend fun updateDownloadStatus(taskId: String, status: String, errorMessage: String? = null) =
+        database.downloadDao().updateStatus(taskId, status, errorMessage)
+
+    suspend fun markDownloadCompleted(
+        taskId: String,
+        totalBytes: Long,
+        localUri: String?,
+        publicUri: String?,
+        stagingPath: String,
+        sha256: String?
+    ) = database.downloadDao().markCompleted(
+        taskId = taskId,
+        totalBytes = totalBytes,
+        localUri = localUri,
+        publicUri = publicUri,
+        stagingPath = stagingPath,
+        sha256 = sha256,
+        completedAt = System.currentTimeMillis()
+    )
+
+    suspend fun setTorrentSequential(taskId: String, sequential: Boolean) =
+        database.downloadDao().setTorrentSequential(taskId, sequential)
+
+    suspend fun updateTorrentFilesJson(taskId: String, filesJson: String) =
+        database.downloadDao().updateTorrentFilesJson(taskId, filesJson)
+
+    suspend fun updateDownloadLocations(
+        taskId: String,
+        fileName: String,
+        stagingPath: String,
+        localUri: String?,
+        publicUri: String?
+    ) = database.downloadDao().updateFileLocations(taskId, fileName, stagingPath, localUri, publicUri)
+
     suspend fun deleteDownloadRecord(id: Long) {
         database.downloadDao().deleteById(id)
+    }
+
+    suspend fun clearFinishedDownloads() {
+        database.downloadDao().clearFinished()
     }
 
     suspend fun clearDownloads() {
@@ -234,6 +326,20 @@ class BrowserRepository(
     suspend fun deleteExtensionRecord(extensionId: String) = database.extensionRecordDao().deleteById(extensionId)
 
     suspend fun setAdBlockEnabled(enabled: Boolean) = preferences.setAdBlockEnabled(enabled)
+    suspend fun setTrackingProtectionLevel(level: TrackingProtectionLevel) =
+        preferences.setTrackingProtectionLevel(level)
+    suspend fun setDoNotTrackEnabled(enabled: Boolean) = preferences.setDoNotTrackEnabled(enabled)
+    suspend fun setGlobalPrivacyControlEnabled(enabled: Boolean) = preferences.setGlobalPrivacyControlEnabled(enabled)
+    suspend fun setCookieIsolationMode(mode: CookieIsolationMode) = preferences.setCookieIsolationMode(mode)
+    suspend fun setCookiePurgingEnabled(enabled: Boolean) = preferences.setCookiePurgingEnabled(enabled)
+    suspend fun setStripTrackingParams(enabled: Boolean) = preferences.setStripTrackingParams(enabled)
+    suspend fun setBounceTrackingProtection(enabled: Boolean) = preferences.setBounceTrackingProtection(enabled)
+    suspend fun setFingerprintingDefense(enabled: Boolean) = preferences.setFingerprintingDefense(enabled)
+    suspend fun setLocalNetworkProtection(enabled: Boolean) = preferences.setLocalNetworkProtection(enabled)
+    suspend fun setSafeBrowsingEnabled(enabled: Boolean) = preferences.setSafeBrowsingEnabled(enabled)
+    suspend fun setDnsOverHttpsConfig(mode: DnsOverHttpsMode, customUrl: String, strict: Boolean) =
+        preferences.setDnsOverHttpsConfig(mode, customUrl, strict)
+    suspend fun setClearPrivateDataOnExit(enabled: Boolean) = preferences.setClearPrivateDataOnExit(enabled)
     suspend fun setHttpsOnlyEnabled(enabled: Boolean) = preferences.setHttpsOnlyEnabled(enabled)
     suspend fun setForceDarkDefault(enabled: Boolean) = preferences.setForceDarkDefault(enabled)
     suspend fun setSearchEngine(engine: SearchEngine) = preferences.setSearchEngine(engine)
@@ -244,6 +350,8 @@ class BrowserRepository(
     suspend fun setShowWallpaperOnStart(enabled: Boolean) = preferences.setShowWallpaperOnStart(enabled)
     suspend fun setAutoUpdateExtensions(enabled: Boolean) = preferences.setAutoUpdateExtensions(enabled)
     suspend fun setLastExtensionUpdateCheckAt(timestamp: Long) = preferences.setLastExtensionUpdateCheckAt(timestamp)
+    suspend fun updateDownloadSettings(transform: (DownloadManagerSettings) -> DownloadManagerSettings) =
+        preferences.updateDownloadSettings(transform)
     suspend fun incrementBlockedTrackers(delta: Long = 1L) = preferences.incrementBlockedTrackers(delta)
     suspend fun resetBlockedCounter() = preferences.resetBlockedCounter()
 }

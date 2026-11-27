@@ -1,10 +1,14 @@
 package com.simpleaibrowser.sab.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -38,6 +42,11 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simpleaibrowser.sab.core.browser.AddressBarPosition
+import com.simpleaibrowser.sab.core.browser.DetectedPageMedia
+import com.simpleaibrowser.sab.core.browser.DownloadKind
+import com.simpleaibrowser.sab.core.browser.DownloadTaskStatus
+import com.simpleaibrowser.sab.core.browser.SabViewerRequest
+import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.ui.components.EngineViewport
 import com.simpleaibrowser.sab.ui.components.FindInPageBar
@@ -45,13 +54,18 @@ import com.simpleaibrowser.sab.ui.components.OperaBottomBar
 import com.simpleaibrowser.sab.ui.components.SabOmniboxEditorOverlay
 import com.simpleaibrowser.sab.ui.components.SabSplashOverlay
 import com.simpleaibrowser.sab.ui.components.SabTopAddressBar
+import com.simpleaibrowser.sab.ui.screens.AddOrConfirmDownloadSheet
 import com.simpleaibrowser.sab.ui.screens.AddSpeedDialDialog
+import com.simpleaibrowser.sab.ui.screens.DownloadManagerScreen
 import com.simpleaibrowser.sab.ui.screens.ExtensionPopupSheet
 import com.simpleaibrowser.sab.ui.screens.ExtensionStoreScreen
 import com.simpleaibrowser.sab.ui.screens.LibraryScreen
 import com.simpleaibrowser.sab.ui.screens.LinkContextBottomSheet
 import com.simpleaibrowser.sab.ui.screens.OperaMenuBottomSheet
+import com.simpleaibrowser.sab.ui.screens.PageMediaGrabberSheet
 import com.simpleaibrowser.sab.ui.screens.PrivacyShieldSheet
+import com.simpleaibrowser.sab.ui.screens.SabMediaPlayerOverlay
+import com.simpleaibrowser.sab.ui.screens.SabPdfViewerOverlay
 import com.simpleaibrowser.sab.ui.screens.SettingsScreen
 import com.simpleaibrowser.sab.ui.screens.SpeedDialStartPage
 import com.simpleaibrowser.sab.ui.screens.TabGalleryScreen
@@ -95,6 +109,7 @@ fun SabBrowserApp(
     val contextMenuTarget by viewModel.contextMenuTarget.collectAsStateWithLifecycle()
     val activePrompt by viewModel.activePrompt.collectAsStateWithLifecycle()
     val pendingShareRequest by viewModel.pendingShareRequest.collectAsStateWithLifecycle()
+    val activeViewer by viewModel.activeViewer.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
 
     val installedExtensions by viewModel.extensions.installedExtensions.collectAsStateWithLifecycle()
@@ -102,8 +117,22 @@ fun SabBrowserApp(
     val extensionUpdatesCount by viewModel.extensions.availableUpdatesCount.collectAsStateWithLifecycle()
     val activeExtensionPopup by viewModel.extensions.activePopup.collectAsStateWithLifecycle()
 
+    val pendingDownloadDraft by viewModel.downloadManager.pendingDraft.collectAsStateWithLifecycle()
+    val currentExplorerPath by viewModel.downloadManager.currentExplorerPath.collectAsStateWithLifecycle()
+    val explorerEntries by viewModel.downloadManager.explorerEntries.collectAsStateWithLifecycle()
+    val storageSummary by viewModel.downloadManager.storageSummary.collectAsStateWithLifecycle()
+    val verifyingShaTaskId by viewModel.downloadManager.verifyingSha256TaskId.collectAsStateWithLifecycle()
+    val detectedPageMedia by viewModel.downloadManager.detectedPageMedia.collectAsStateWithLifecycle()
+    val isScanningMedia by viewModel.downloadManager.isScanningMedia.collectAsStateWithLifecycle()
+
+    val activeDownloadsCount = remember(downloads) {
+        downloads.count { DownloadTaskStatus.fromId(it.status).isActive }
+    }
+
     var pendingFilePrompt by remember { mutableStateOf<WebPromptRequest.FileUpload?>(null) }
     var pendingPermissionPrompt by remember { mutableStateOf<WebPromptRequest.AndroidPermissions?>(null) }
+    var showOperaMediaSheet by remember { mutableStateOf(false) }
+    var askedNotificationPermission by remember { mutableStateOf(false) }
 
     val singleFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -131,6 +160,35 @@ fun SabBrowserApp(
         pendingPermissionPrompt = null
         p?.onResult(allGranted)
         viewModel.dismissPrompt(p?.id)
+    }
+
+    val torrentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { viewModel.downloadManager.startTorrentFromPickedUri(it) }
+    }
+
+    val customFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let { viewModel.downloadManager.setCustomFolderUri(it) }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { }
+
+    LaunchedEffect(activeDownloadsCount) {
+        if (activeDownloadsCount > 0 && !askedNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            askedNotificationPermission = true
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
     }
 
     LaunchedEffect(activePrompt?.id) {
@@ -276,7 +334,7 @@ fun SabBrowserApp(
                             onNewPrivateTab = { viewModel.createNewTab(isPrivate = true, select = true) },
                             onOpenBookmarks = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.BOOKMARKS)) },
                             onOpenHistory = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.HISTORY)) },
-                            onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.DOWNLOADS)) },
+                            onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.DownloadManager()) },
                             onOpenExtensions = { viewModel.openOverlay(BrowserOverlay.Extensions(ExtensionsTab.AMO)) },
                             onOpenSettings = { viewModel.openOverlay(BrowserOverlay.Settings) }
                         )
@@ -386,6 +444,7 @@ fun SabBrowserApp(
                         extensionActions = extensionActions,
                         installedExtensionsCount = userExtCount,
                         extensionUpdatesCount = extensionUpdatesCount,
+                        activeDownloadsCount = activeDownloadsCount,
                         onDismiss = { viewModel.closeOverlay() },
                         onForward = { viewModel.goForward() },
                         onToggleBookmark = { viewModel.toggleCurrentBookmark() },
@@ -400,7 +459,11 @@ fun SabBrowserApp(
                         onNewPrivateTab = { viewModel.createNewTab(isPrivate = true, select = true) },
                         onOpenBookmarks = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.BOOKMARKS)) },
                         onOpenHistory = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.HISTORY)) },
-                        onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.Library(LibraryTab.DOWNLOADS)) },
+                        onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.DownloadManager()) },
+                        onGrabPageMedia = {
+                            viewModel.downloadManager.scanCurrentPageMedia(activeSession)
+                            showOperaMediaSheet = true
+                        },
                         onOpenExtensions = { viewModel.openOverlay(BrowserOverlay.Extensions(ExtensionsTab.AMO)) },
                         onTriggerExtensionAction = { extId -> viewModel.extensions.triggerBrowserAction(extId) },
                         onPinToSpeedDial = { viewModel.addCurrentPageToSpeedDial() },
@@ -420,8 +483,14 @@ fun SabBrowserApp(
                         activeTab = activeTab,
                         settings = settings,
                         engineInfo = viewModel.engineInfo,
-                        onToggleAdBlock = { viewModel.setAdBlockEnabled(it) },
+                        onSelectTrackingLevel = { viewModel.setTrackingProtectionLevel(it) },
+                        onToggleDoNotTrack = { viewModel.setDoNotTrackEnabled(it) },
+                        onToggleGpc = { viewModel.setGlobalPrivacyControlEnabled(it) },
+                        onToggleStripTrackers = { viewModel.setStripTrackingParams(it) },
                         onToggleHttpsOnly = { viewModel.setHttpsOnlyEnabled(it) },
+                        onToggleSafeBrowsing = { viewModel.setSafeBrowsingEnabled(it) },
+                        onPurgeCookies = { viewModel.clearCookiesAndSiteDataOnly() },
+                        onOpenPrivacySettings = { viewModel.openOverlay(BrowserOverlay.Settings) },
                         onDismiss = { viewModel.closeOverlay() }
                     )
                 }
@@ -439,6 +508,69 @@ fun SabBrowserApp(
                         onDeleteDownload = { viewModel.deleteDownloadRecord(it) },
                         onClearHistory = { viewModel.clearHistoryOnly() },
                         onClearDownloads = { viewModel.clearDownloads() },
+                        onOpenFullDownloadManager = { viewModel.openOverlay(BrowserOverlay.DownloadManager()) },
+                        onDismiss = { viewModel.closeOverlay() }
+                    )
+                }
+
+                is BrowserOverlay.DownloadManager -> {
+                    DownloadManagerScreen(
+                        initialTab = currentOverlay.initialTab,
+                        downloads = downloads,
+                        downloadSettings = settings.downloadSettings,
+                        currentExplorerPath = currentExplorerPath,
+                        explorerEntries = explorerEntries,
+                        storageSummary = storageSummary,
+                        verifyingShaTaskId = verifyingShaTaskId,
+                        canScanActivePage = !activeTab.isStartPage,
+                        activePageTitle = activeTab.title,
+                        detectedPageMedia = detectedPageMedia,
+                        isScanningMedia = isScanningMedia,
+                        onAddClick = { viewModel.downloadManager.openAddDownloadDialog() },
+                        onPickTorrentFile = {
+                            torrentPickerLauncher.launch(arrayOf("application/x-bittorrent", "*/*"))
+                        },
+                        onScanPageMedia = { viewModel.downloadManager.scanCurrentPageMedia(activeSession) },
+                        onPlayOrViewMedia = { media -> viewModel.openDetectedMediaInViewer(media) },
+                        onDownloadDetectedMedia = { media ->
+                            viewModel.downloadManager.downloadDetectedMedia(media)
+                        },
+                        onDownloadAllMedia = { mediaList ->
+                            mediaList.forEach { viewModel.downloadManager.downloadDetectedMedia(it) }
+                        },
+                        onClearDetectedMedia = { viewModel.downloadManager.clearDetectedMedia() },
+                        onPauseAll = { viewModel.downloadManager.pauseAllActive() },
+                        onResumeAll = { viewModel.downloadManager.resumeAllPaused() },
+                        onClearFinished = { viewModel.downloadManager.clearFinished() },
+                        onPauseTask = { viewModel.downloadManager.pauseTask(it) },
+                        onResumeTask = { viewModel.downloadManager.resumeTask(it) },
+                        onCancelTask = { viewModel.downloadManager.cancelTask(it) },
+                        onOpenTask = { viewModel.openDownloadedFile(context, it) },
+                        onExportTask = { viewModel.downloadManager.exportDownloadToPublicDownloads(it) },
+                        onShareTask = { viewModel.downloadManager.shareDownloadedFile(context, it) },
+                        onCopyTaskUrl = { viewModel.copyTextToClipboard("Download URL", it.url) },
+                        onVerifySha = { viewModel.downloadManager.verifySha256(it) },
+                        onToggleTorrentSequential = { viewModel.downloadManager.toggleTorrentSequential(it) },
+                        onToggleTorrentFile = { entity, idx ->
+                            viewModel.downloadManager.toggleTorrentFileSelected(entity, idx)
+                        },
+                        onDeleteTask = { entity, deleteFiles ->
+                            viewModel.downloadManager.deleteDownloadRecord(entity, deleteFiles)
+                        },
+                        onNavigateExplorerUp = { viewModel.downloadManager.navigateExplorerUp() },
+                        onCreateExplorerFolder = { name -> viewModel.downloadManager.createExplorerFolder(name) },
+                        onOpenExplorerEntry = { entry -> viewModel.openVaultFile(context, entry) },
+                        onExportExplorerEntry = { entry ->
+                            viewModel.downloadManager.exportVaultFileToPublicDownloads(entry)
+                        },
+                        onShareExplorerEntry = { entry -> viewModel.downloadManager.shareVaultFile(context, entry) },
+                        onRenameExplorerEntry = { entry, newName ->
+                            viewModel.downloadManager.renameExplorerEntry(entry, newName)
+                        },
+                        onDeleteExplorerEntry = { entry -> viewModel.downloadManager.deleteExplorerEntry(entry) },
+                        onUpdateDownloadSettings = { transform -> viewModel.updateDownloadSettings(transform) },
+                        onPickCustomFolder = { customFolderLauncher.launch(null) },
+                        onClearCustomFolder = { viewModel.clearCustomDownloadFolder() },
                         onDismiss = { viewModel.closeOverlay() }
                     )
                 }
@@ -453,12 +585,27 @@ fun SabBrowserApp(
                         onSelectAddressBarPosition = { viewModel.setAddressBarPosition(it) },
                         onToggleRestoreTabs = { viewModel.setRestoreTabsOnStart(it) },
                         onSelectDefaultTextZoom = { viewModel.setDefaultTextZoom(it) },
-                        onToggleAdBlock = { viewModel.setAdBlockEnabled(it) },
+                        onSelectTrackingLevel = { viewModel.setTrackingProtectionLevel(it) },
+                        onToggleDoNotTrack = { viewModel.setDoNotTrackEnabled(it) },
+                        onToggleGpc = { viewModel.setGlobalPrivacyControlEnabled(it) },
+                        onSelectCookieMode = { viewModel.setCookieIsolationMode(it) },
+                        onToggleCookiePurging = { viewModel.setCookiePurgingEnabled(it) },
+                        onToggleStripTrackingParams = { viewModel.setStripTrackingParams(it) },
+                        onToggleBounceTracking = { viewModel.setBounceTrackingProtection(it) },
+                        onToggleFingerprintingDefense = { viewModel.setFingerprintingDefense(it) },
+                        onToggleLocalNetworkProtection = { viewModel.setLocalNetworkProtection(it) },
+                        onToggleSafeBrowsing = { viewModel.setSafeBrowsingEnabled(it) },
+                        onUpdateDohConfig = { mode, customUrl, strict ->
+                            viewModel.setDnsOverHttpsConfig(mode, customUrl, strict)
+                        },
+                        onToggleClearOnExit = { viewModel.setClearPrivateDataOnExit(it) },
+                        onPurgeCookiesOnly = { viewModel.clearCookiesAndSiteDataOnly() },
                         onToggleHttpsOnly = { viewModel.setHttpsOnlyEnabled(it) },
                         onToggleForceDarkDefault = { viewModel.setForceDarkDefault(it) },
                         onToggleWallpaper = { viewModel.setShowWallpaperOnStart(it) },
                         onToggleAutoUpdateExtensions = { viewModel.setAutoUpdateExtensions(it) },
                         onOpenExtensionsStore = { viewModel.openOverlay(BrowserOverlay.Extensions(ExtensionsTab.INSTALLED)) },
+                        onOpenDownloadManager = { viewModel.openOverlay(BrowserOverlay.DownloadManager()) },
                         onClearAllData = { viewModel.clearAllBrowsingData() },
                         onDismiss = { viewModel.closeOverlay() }
                     )
@@ -548,7 +695,17 @@ fun SabBrowserApp(
                     onOpenInIsland = { url -> viewModel.openLinkInNewTab(url, inIsland = true, isPrivate = false) },
                     onOpenInPrivateTab = { url -> viewModel.openLinkInNewTab(url, inIsland = false, isPrivate = true) },
                     onCopyUrl = { url -> viewModel.copyTextToClipboard("link", url) },
+                    onCopyCleanUrl = { url -> viewModel.copyCleanUrlToClipboard(url) },
                     onDownloadUrl = { url -> viewModel.downloadUrl(url) },
+                    onOpenInBuiltInViewer = { url ->
+                        viewModel.openDetectedMediaInViewer(
+                            DetectedPageMedia(
+                                url = url,
+                                title = target.title ?: UrlResolver.guessFileName(url, null),
+                                kind = DownloadKind.infer(url, null, url)
+                            )
+                        )
+                    },
                     onShareUrl = { url -> shareText(context, target.title ?: url, url) },
                     onDismiss = { viewModel.dismissContextMenu() }
                 )
@@ -560,6 +717,57 @@ fun SabBrowserApp(
                     prompt = prompt,
                     onDismissComplete = { viewModel.dismissPrompt(prompt.id) }
                 )
+            }
+
+            pendingDownloadDraft?.let { draft ->
+                AddOrConfirmDownloadSheet(
+                    draft = draft,
+                    onPickTorrentFile = {
+                        torrentPickerLauncher.launch(arrayOf("application/x-bittorrent", "*/*"))
+                    },
+                    onConfirm = { confirmedDraft ->
+                        viewModel.downloadManager.startFromDraft(confirmedDraft)
+                    },
+                    onDismiss = { viewModel.downloadManager.dismissDraft() }
+                )
+            }
+
+            if (showOperaMediaSheet) {
+                PageMediaGrabberSheet(
+                    pageTitle = activeTab.title,
+                    items = detectedPageMedia,
+                    isScanning = isScanningMedia,
+                    onRescan = { viewModel.downloadManager.scanCurrentPageMedia(activeSession) },
+                    onPlayOrViewItem = { media ->
+                        showOperaMediaSheet = false
+                        viewModel.openDetectedMediaInViewer(media)
+                    },
+                    onDownloadItem = { media -> viewModel.downloadManager.downloadDetectedMedia(media) },
+                    onDownloadAll = { mediaList ->
+                        mediaList.forEach { viewModel.downloadManager.downloadDetectedMedia(it) }
+                        showOperaMediaSheet = false
+                    },
+                    onDismiss = {
+                        showOperaMediaSheet = false
+                        viewModel.downloadManager.clearDetectedMedia()
+                    }
+                )
+            }
+
+            when (val viewer = activeViewer) {
+                is SabViewerRequest.Pdf -> SabPdfViewerOverlay(
+                    request = viewer,
+                    onShareUri = { target, title -> viewModel.downloadManager.shareUriOrText(context, target, title) },
+                    onOpenExternal = { uri, mime -> viewModel.downloadManager.openUriExternally(context, uri, mime, viewer.title) },
+                    onDismiss = { viewModel.closeViewer() }
+                )
+                is SabViewerRequest.Media -> SabMediaPlayerOverlay(
+                    request = viewer,
+                    onShareUri = { target, title -> viewModel.downloadManager.shareUriOrText(context, target, title) },
+                    onOpenExternal = { uri, mime -> viewModel.downloadManager.openUriExternally(context, uri, mime, viewer.title) },
+                    onDismiss = { viewModel.closeViewer() }
+                )
+                null -> Unit
             }
 
             // Floating Feedback Pill Toast

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <external-files-path name="sab_external_downloads" path="Download/" />
+    <external-files-path name="sab_external_root" path="." />
+    <files-path name="sab_internal_downloads" path="sab_downloads/" />
+    <cache-path name="sab_cache" path="." />
+</paths>

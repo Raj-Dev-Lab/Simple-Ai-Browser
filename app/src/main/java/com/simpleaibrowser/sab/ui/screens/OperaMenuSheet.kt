@@ -71,13 +71,21 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.PrivacyTip
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.ui.graphics.asImageBitmap
 import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.ExtensionActionState
 import com.simpleaibrowser.sab.core.browser.SecurityState
 import com.simpleaibrowser.sab.core.browser.TabUiState
+import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.data.BrowserSettings
 import com.simpleaibrowser.sab.ui.theme.JetBrainsMonoFamily
@@ -92,6 +100,7 @@ fun OperaMenuBottomSheet(
     extensionActions: List<ExtensionActionState>,
     installedExtensionsCount: Int,
     extensionUpdatesCount: Int,
+    activeDownloadsCount: Int = 0,
     onDismiss: () -> Unit,
     onForward: () -> Unit,
     onToggleBookmark: () -> Unit,
@@ -103,6 +112,7 @@ fun OperaMenuBottomSheet(
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenDownloads: () -> Unit,
+    onGrabPageMedia: () -> Unit = {},
     onOpenExtensions: () -> Unit,
     onTriggerExtensionAction: (String) -> Unit,
     onPinToSpeedDial: () -> Unit,
@@ -381,13 +391,30 @@ fun OperaMenuBottomSheet(
                 }
                 MenuActionRow(icon = Icons.Filled.Bookmark, title = "Bookmarks", onClick = onOpenBookmarks)
                 MenuActionRow(icon = Icons.Filled.History, title = "History", onClick = onOpenHistory)
+                val downloadsLabel = if (activeDownloadsCount > 0) {
+                    "Download Manager ($activeDownloadsCount active)"
+                } else {
+                    "Download Manager & Files"
+                }
                 MenuActionRow(
                     icon = Icons.Filled.Download,
-                    title = "Downloads",
+                    title = downloadsLabel,
                     tint = sabColors.shieldGreen,
                     onClick = onOpenDownloads,
                     testTag = "menu_downloads_row"
                 )
+                if (!activeTab.isStartPage) {
+                    MenuActionRow(
+                        icon = Icons.Filled.VideoLibrary,
+                        title = "Grab Page Media & Links",
+                        tint = MaterialTheme.colorScheme.primary,
+                        onClick = {
+                            onDismiss()
+                            onGrabPageMedia()
+                        },
+                        testTag = "menu_grab_media_row"
+                    )
+                }
                 val extLabel = when {
                     extensionUpdatesCount > 0 -> "Extensions ($installedExtensionsCount • $extensionUpdatesCount update)"
                     installedExtensionsCount > 0 -> "Extensions & Store ($installedExtensionsCount)"
@@ -426,12 +453,17 @@ fun LinkContextBottomSheet(
     onOpenInIsland: (String) -> Unit,
     onOpenInPrivateTab: (String) -> Unit,
     onCopyUrl: (String) -> Unit,
+    onCopyCleanUrl: (String) -> Unit = onCopyUrl,
+    onOpenInBuiltInViewer: ((String) -> Unit)? = null,
     onDownloadUrl: (String) -> Unit,
     onShareUrl: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     val sabColors = LocalSabColors.current
     val primaryUrl = target.linkUrl ?: target.mediaUrl ?: return
+    val viewerCandidate = target.mediaUrl ?: primaryUrl
+    val isPdfCandidate = UrlResolver.isPdfTarget(viewerCandidate, null)
+    val (isPlayableMedia, isVideoMedia) = UrlResolver.classifyPlayableMedia(viewerCandidate, null)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -493,11 +525,32 @@ fun LinkContextBottomSheet(
                     tint = sabColors.privateAccent,
                     onClick = { onOpenInPrivateTab(primaryUrl) }
                 )
+                if (onOpenInBuiltInViewer != null && (isPdfCandidate || isPlayableMedia)) {
+                    MenuActionRow(
+                        icon = if (isPdfCandidate) Icons.Filled.PictureAsPdf else Icons.Filled.PlayArrow,
+                        title = when {
+                            isPdfCandidate -> "Open in Built-in PDF Viewer"
+                            isVideoMedia -> "Play in Built-in Video Player"
+                            else -> "Play in Built-in Audio Player"
+                        },
+                        tint = MaterialTheme.colorScheme.primary,
+                        onClick = {
+                            onDismiss()
+                            onOpenInBuiltInViewer(viewerCandidate)
+                        }
+                    )
+                }
                 HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
                 MenuActionRow(
                     icon = Icons.Filled.ContentCopy,
                     title = "Copy Link Address",
                     onClick = { onCopyUrl(primaryUrl); onDismiss() }
+                )
+                MenuActionRow(
+                    icon = Icons.Filled.FilterAlt,
+                    title = "Copy Clean Link (No Trackers)",
+                    tint = sabColors.shieldGreen,
+                    onClick = { onCopyCleanUrl(primaryUrl); onDismiss() }
                 )
                 val downloadTarget = target.mediaUrl ?: primaryUrl
                 MenuActionRow(
@@ -524,8 +577,14 @@ fun PrivacyShieldSheet(
     activeTab: TabUiState,
     settings: BrowserSettings,
     engineInfo: EngineInfo,
-    onToggleAdBlock: (Boolean) -> Unit,
+    onSelectTrackingLevel: (TrackingProtectionLevel) -> Unit,
+    onToggleDoNotTrack: (Boolean) -> Unit,
+    onToggleGpc: (Boolean) -> Unit,
+    onToggleStripTrackers: (Boolean) -> Unit,
     onToggleHttpsOnly: (Boolean) -> Unit,
+    onToggleSafeBrowsing: (Boolean) -> Unit,
+    onPurgeCookies: () -> Unit,
+    onOpenPrivacySettings: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sabColors = LocalSabColors.current
@@ -539,9 +598,10 @@ fun PrivacyShieldSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -551,27 +611,36 @@ fun PrivacyShieldSheet(
                     modifier = Modifier
                         .size(46.dp)
                         .clip(CircleShape)
-                        .background(sabColors.shieldGreen.copy(alpha = 0.16f)),
+                        .background(
+                            if (settings.trackingProtectionLevel != TrackingProtectionLevel.OFF) {
+                                sabColors.shieldGreen.copy(alpha = 0.16f)
+                            } else {
+                                MaterialTheme.colorScheme.error.copy(alpha = 0.16f)
+                            }
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Shield,
                         contentDescription = null,
-                        tint = sabColors.shieldGreen,
+                        tint = if (settings.trackingProtectionLevel != TrackingProtectionLevel.OFF) sabColors.shieldGreen
+                        else MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(24.dp)
                     )
                 }
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "SAB Privacy Shield",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = if (activeTab.isStartPage) "Start Page • Protected"
-                        else UrlResolver.extractHost(activeTab.url),
+                        text = if (activeTab.isStartPage) "Start Page • ${settings.cookieIsolationMode.displayName}"
+                        else "${UrlResolver.extractHost(activeTab.url)} • ${settings.trackingProtectionLevel.displayName}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = sabColors.subtleText
+                        color = sabColors.subtleText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -591,6 +660,59 @@ fun PrivacyShieldSheet(
                     label = "Lifetime blocked",
                     accent = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Tracking Protection Level Selector (Off / Standard / Strict)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(sabColors.chromeSurfaceElevated)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "TRACKING PREVENTION LEVEL",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = sabColors.subtleText,
+                    letterSpacing = 1.1.sp
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    TrackingProtectionLevel.entries.forEach { level ->
+                        val selected = settings.trackingProtectionLevel == level
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (selected) sabColors.shieldGreen.copy(alpha = 0.2f)
+                                    else sabColors.chromeBar
+                                )
+                                .border(
+                                    1.dp,
+                                    if (selected) sabColors.shieldGreen else sabColors.chromeBorder,
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .clickable { onSelectTrackingLevel(level) }
+                                .padding(vertical = 9.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = level.displayName,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) sabColors.shieldGreen else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = settings.trackingProtectionLevel.subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = sabColors.subtleText
                 )
             }
 
@@ -619,7 +741,7 @@ fun PrivacyShieldSheet(
                         style = MaterialTheme.typography.titleSmall
                     )
                     Text(
-                        text = "Powered by ${engineInfo.name} ${engineInfo.version}",
+                        text = "Cookies: ${settings.cookieIsolationMode.displayName} • ${engineInfo.name}",
                         style = MaterialTheme.typography.bodySmall,
                         color = sabColors.subtleText
                     )
@@ -633,21 +755,69 @@ fun PrivacyShieldSheet(
                     .background(sabColors.chromeSurfaceElevated)
             ) {
                 MenuToggleRow(
-                    icon = Icons.Filled.Shield,
+                    icon = Icons.Filled.PrivacyTip,
                     iconTint = sabColors.shieldGreen,
-                    title = "Enhanced Ad & Tracker Blocking",
-                    subtitle = "Blocks ads, analytics, fingerprinting & cryptominers",
-                    checked = settings.adBlockEnabled,
-                    onCheckedChange = onToggleAdBlock
+                    title = "Do Not Track (DNT: 1)",
+                    subtitle = "Send DNT header & navigator.doNotTrack signal",
+                    checked = settings.doNotTrackEnabled,
+                    onCheckedChange = onToggleDoNotTrack
+                )
+                HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                MenuToggleRow(
+                    icon = Icons.Filled.Shield,
+                    iconTint = MaterialTheme.colorScheme.primary,
+                    title = "Global Privacy Control (Sec-GPC)",
+                    subtitle = "Enforce legal opt-out from cross-site tracking & data sale",
+                    checked = settings.globalPrivacyControlEnabled,
+                    onCheckedChange = onToggleGpc
+                )
+                HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                MenuToggleRow(
+                    icon = Icons.Filled.FilterAlt,
+                    iconTint = MaterialTheme.colorScheme.secondary,
+                    title = "Strip Tracking Parameters",
+                    subtitle = "Clean utm_*, fbclid, gclid, igshid tokens from links",
+                    checked = settings.stripTrackingParams,
+                    onCheckedChange = onToggleStripTrackers
                 )
                 HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
                 MenuToggleRow(
                     icon = Icons.Filled.Lock,
                     iconTint = MaterialTheme.colorScheme.secondary,
                     title = "HTTPS-Only Mode",
-                    subtitle = "Automatically upgrade HTTP addresses to HTTPS",
+                    subtitle = "Automatically upgrade HTTP links to HTTPS",
                     checked = settings.httpsOnlyEnabled,
                     onCheckedChange = onToggleHttpsOnly
+                )
+                HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                MenuToggleRow(
+                    icon = Icons.Filled.Shield,
+                    iconTint = sabColors.shieldGreen,
+                    title = "Safe Browsing Guard",
+                    subtitle = "Warn on known phishing & malware hosts",
+                    checked = settings.safeBrowsingEnabled,
+                    onCheckedChange = onToggleSafeBrowsing
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(sabColors.chromeSurfaceElevated)
+            ) {
+                MenuActionRow(
+                    icon = Icons.Filled.CleaningServices,
+                    title = "Purge Site Cookies & Storage",
+                    tint = MaterialTheme.colorScheme.error,
+                    onClick = onPurgeCookies
+                )
+                HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                MenuActionRow(
+                    icon = Icons.Filled.Tune,
+                    title = "All Privacy, Cookie & DNS Settings",
+                    tint = MaterialTheme.colorScheme.primary,
+                    onClick = onOpenPrivacySettings
                 )
             }
 

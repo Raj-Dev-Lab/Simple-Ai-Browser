@@ -1,7 +1,7 @@
 # Simple AI Browser (SAB)
 
 [![Android CI](https://github.com/Raj-Dev-Lab/Simple-Ai-Browser/actions/workflows/android-ci.yml/badge.svg)](https://github.com/Raj-Dev-Lab/Simple-Ai-Browser/actions/workflows/android-ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-crimson.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-crimson.svg)](LICENSE)
 [![Engine: GeckoView 161+](https://img.shields.io/badge/Engine-GeckoView%20161%20non--omni-blue.svg)](docs/GECKOVIEW_ENGINE.md)
 [![Platform: Android 10+](https://img.shields.io/badge/Android-10%2B%20(API%2029%2B)-3DDC84.svg)](app/build.gradle.kts)
 
@@ -11,23 +11,17 @@ Package ID: `com.simpleaibrowser.sab` · Minimum SDK: Android 10 (`API 29`) · A
 
 ---
 
-## Key Features (v1.2.0 — Full Browser Engine & Ergonomics Upgrade)
+## Key Features (v1.4.0 — Privacy Suite, Built-in Viewers, Download Manager & Extension Store)
 
-- **Mozilla GeckoView 161+ Engine (`non-omni`, `arm64-v8a` & `x86_64`)**: Full Gecko rendering with Enhanced Tracking Protection (ETP), Safe Browsing, anti-fingerprinting, native fullscreen video, JS prompts, site permission dialogs, download interception, and the built-in `sab-bridge` WebExtension.
-- **Engine-Agnostic Architecture**: Strict separation between the Compose UI shell (`ui/`), browser contracts (`core/browser/`), and the GeckoView adapter (`engine/gecko/`) — inspired by Opera Mobile's modular design.
-- **Opera-Inspired Thumb-Zone Ergonomics**:
-  - 5-slot bottom navigation bar (`Back`, `Home`, glowing `Fast Action Search Orb`, `Tab Counter Badge`, `Control Menu`)
-  - Optional **Bottom Address Bar Mode** for true one-handed browsing
-  - **Swipe horizontally on the address bar** to switch between open tabs instantly
-- **Speed Dial Start Page with Live Favicons**: Atmospheric OLED start page with live Privacy Shield telemetry, Coil-powered site favicons with monogram fallbacks, customizable 4-column Speed Dial tiles, and quick access to Private Mode, Bookmarks, History, Downloads, and Settings.
-- **Redesigned Tab Gallery, Tab Islands & Session Restore**:
-  - Automatic contextual grouping when links open in new tabs
-  - Create, rename, collapse, assign tabs (long-press), and bulk-close color-coded Tab Islands
-  - Automatic session persistence restores regular tabs and Tab Islands on relaunch
-  - Regular / Islands / Private switcher, Grid & List views, live tab search, and Recently Closed Tabs undo
-- **Native Download Manager & Long-Press Context Menus**: Android `DownloadManager` integration with zero storage permissions required on Android 10+, dedicated **Downloads** tab in Library, and long-press link/media menus (*Open in New Tab*, *Open in Tab Island*, *Open in Private Tab*, *Copy*, *Download*, *Share*).
-- **Power-User Reading & Navigation Controls**: Live Page Text Zoom (`75%–160%`), Find-in-Page with match counter and Previous/Next navigation, one-tap Search Engine Switcher chips in the omnibox, Desktop Site mode, Force Dark Pages, Reader Focus Mode, and 4 Material 3 Theme Presets.
-- **Signature Launch Reveal**: Custom adaptive SAB prism logo paired with an animated orbital intro sequence.
+- **Mozilla GeckoView 161+ Engine (`non-omni`, `arm64-v8a` & `x86_64`)**: Full Gecko rendering with configurable Enhanced Tracking Protection (`Off`/`Standard`/`Strict`), Do Not Track (`DNT: 1`), Global Privacy Control (`Sec-GPC: 1`), Total Cookie Protection (`dFPI`), URL tracking parameter stripping, anti-fingerprinting, Local Network Access Protection, Encrypted DNS over HTTPS (DoH), native fullscreen video, JS prompts, Android permission flows, and `sab-bridge` WebExtension (`1.3.0`).
+- **Built-in PDF Viewer & Media3 ExoPlayer**: Open downloaded, vault, or online PDFs in `SabPdfViewerOverlay` (native Android `PdfRenderer` with zoom, page scrubber & night paper mode), and stream/play video, audio, and HLS `.m3u8` streams in `SabMediaPlayerOverlay` (`Media3 ExoPlayer 1.11.1`).
+- **Extension Store & Auto-Updater (`Mozilla Store` + `GitHub`)**: Browse Mozilla Add-ons (AMO) and GitHub WebExtension releases, install directly into GeckoView, inspect toolbar popups/options, and keep extensions updated automatically.
+- **Dedicated Versatile Download Manager (`All` | `Torrents` | `Media` | `Files`)**:
+  - **Multi-Thread HTTP (`OkHttp` + `RandomAccessFile`)**: 1–16 parallel `Range` byte segments, pause/resume persistence, KB/s speed caps, custom User-Agent, metered Wi-Fi-only hold + auto-resume on Wi-Fi reconnect.
+  - **Native BitTorrent (`libtorrent4j`)**: `magnet:` links and `.torrent` files with DHT/LSD, sequential streaming piece order, per-file priority selection, live peer/seed counts, and seeding controls.
+  - **Page Media & Link Grabber**: Scans any live webpage for `<video>`, `<audio>`, `<img>`, `magnet:`, and downloadable links.
+  - **SAB File System & Explorer**: Structured download vault with folder creation, rename, delete, SHA-256 checksum verification, zero-permission `MediaStore.Downloads` export (`Downloads/Simple AI Browser`), and custom SAF folder selection (`OpenDocumentTree`).
+- **Opera-Inspired Thumb-Zone Ergonomics & Power Controls**: Top/Bottom address bar switching, swipe-to-switch tabs, Speed Dial with live favicons, Tab Islands + Session Restore, Find-in-Page, Live Page Text Zoom (`75%–160%`), Force Dark Pages, Reader Focus Mode, and 4 Material 3 themes.
 
 ---
 
@@ -91,7 +85,7 @@ gradle :app:testDebugUnitTest --tests "com.example.ExampleUnitTest"
 ## Roadmap Highlights
 
 - **Phase 1 (`v1.1.x` — Completed):** Production GeckoView 161+ dual-ABI browser core, Opera-inspired UI shell, Speed Dial, Tab Islands, Privacy Shield, Bookmarks & History, automated GitHub Releases.
-- **Phase 2 (`v1.2.0` — Current):** Native Download Manager & Downloads tab, Bottom Address Bar mode, Swipe-to-Switch Tabs, Tab & Island Session Restore, Long-Press Link/Media Context Menus, Native Web Prompts & Site Permissions, Immersive Fullscreen Video, Live Page Text Zoom, Favicons, and Find-in-Page match counter.
+- **Phase 2 (`v1.2.0` – `v1.4.0` — Completed):** Bottom Address Bar mode, Tab & Island Session Restore, Extension Store (`Mozilla AMO` + `GitHub`) with Auto-Updater, Multi-Thread HTTP + `libtorrent4j` BitTorrent Download Manager, Page Media Grabber, In-App File Explorer, and GNU GPL v3.0 Attribution.
 - **Phase 3 (`v2.0.0`):** Modular AI Assistant layer (page summarization, selection Q&A, translation, Tab Island comparison) powered via `sab-bridge` DOM snapshots.
 
 ---
@@ -102,7 +96,8 @@ gradle :app:testDebugUnitTest --tests "com.example.ExampleUnitTest"
 - Security issues and vulnerability disclosures are handled via [SECURITY.md](SECURITY.md).
 - Track all releases in [CHANGELOG.md](CHANGELOG.md).
 
-## License
+## License & Attribution
 
-Simple AI Browser (SAB) source code is licensed under the **MIT License** — see [LICENSE](LICENSE).  
-Pre-compiled Mozilla GeckoView binaries are governed by the **Mozilla Public License 2.0 (MPL-2.0)**.
+Simple AI Browser (SAB) source code is **Copyright © 2026 Tamal Mitra (Raj-Dev-Lab)** and licensed under the **GNU General Public License v3.0 (GPL-3.0)** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).  
+All forks, source redistributions, and compiled builds must retain author attribution (`Tamal Mitra / Raj-Dev-Lab`) and the [NOTICE](NOTICE) file.  
+Third-party components: Mozilla GeckoView (**MPL-2.0**), libtorrent4j (**MIT**), and AndroidX/Jetpack/OkHttp (**Apache-2.0**).

@@ -13,6 +13,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
+import java.util.UUID
 
 @Entity(tableName = "speed_dials")
 data class SpeedDialEntity(
@@ -43,13 +44,35 @@ data class HistoryEntity(
 @Entity(tableName = "downloads")
 data class DownloadEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
-    val systemDownloadId: Long,
+    val systemDownloadId: Long = -1L,
     val fileName: String,
     val url: String,
     val mimeType: String = "application/octet-stream",
     val sizeBytes: Long = -1L,
     val createdAt: Long = System.currentTimeMillis(),
-    val localUri: String? = null
+    val localUri: String? = null,
+    val taskId: String = UUID.randomUUID().toString(),
+    val kind: String = "file",
+    val status: String = "completed",
+    val downloadedBytes: Long = 0L,
+    val speedBytesPerSec: Long = 0L,
+    val etaSeconds: Long = -1L,
+    val connectionsCount: Int = 1,
+    val supportsRange: Boolean = false,
+    val stagingPath: String = "",
+    val publicUri: String? = null,
+    val subfolder: String = "",
+    val etag: String? = null,
+    val segmentsJson: String? = null,
+    val torrentInfoHash: String? = null,
+    val torrentFilesJson: String? = null,
+    val torrentPeers: Int = 0,
+    val torrentSeeds: Int = 0,
+    val sequentialTorrent: Boolean = false,
+    val wifiOnly: Boolean = false,
+    val errorMessage: String? = null,
+    val sha256: String? = null,
+    val completedAt: Long = 0L
 )
 
 @Entity(tableName = "saved_tabs")
@@ -153,11 +176,88 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<DownloadEntity>>
 
+    @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
+    suspend fun getAll(): List<DownloadEntity>
+
+    @Query("SELECT * FROM downloads WHERE id = :id LIMIT 1")
+    suspend fun findById(id: Long): DownloadEntity?
+
+    @Query("SELECT * FROM downloads WHERE taskId = :taskId LIMIT 1")
+    suspend fun findByTaskId(taskId: String): DownloadEntity?
+
+    @Query("SELECT * FROM downloads WHERE torrentInfoHash = :infoHash LIMIT 1")
+    suspend fun findByInfoHash(infoHash: String): DownloadEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(item: DownloadEntity)
+    suspend fun insert(item: DownloadEntity): Long
+
+    @Query(
+        "UPDATE downloads SET fileName = :fileName, sizeBytes = :sizeBytes, downloadedBytes = :downloadedBytes, " +
+            "speedBytesPerSec = :speedBytesPerSec, etaSeconds = :etaSeconds, status = :status, " +
+            "supportsRange = :supportsRange, etag = :etag, segmentsJson = :segmentsJson, " +
+            "torrentPeers = :torrentPeers, torrentSeeds = :torrentSeeds, torrentFilesJson = :torrentFilesJson, " +
+            "torrentInfoHash = :torrentInfoHash, errorMessage = :errorMessage WHERE taskId = :taskId"
+    )
+    suspend fun updateRuntimeState(
+        taskId: String,
+        fileName: String,
+        sizeBytes: Long,
+        downloadedBytes: Long,
+        speedBytesPerSec: Long,
+        etaSeconds: Long,
+        status: String,
+        supportsRange: Boolean,
+        etag: String?,
+        segmentsJson: String?,
+        torrentPeers: Int,
+        torrentSeeds: Int,
+        torrentFilesJson: String?,
+        torrentInfoHash: String?,
+        errorMessage: String?
+    )
+
+    @Query(
+        "UPDATE downloads SET status = :status, speedBytesPerSec = 0, etaSeconds = -1, errorMessage = :errorMessage " +
+            "WHERE taskId = :taskId"
+    )
+    suspend fun updateStatus(taskId: String, status: String, errorMessage: String? = null)
+
+    @Query(
+        "UPDATE downloads SET status = 'completed', downloadedBytes = :totalBytes, sizeBytes = :totalBytes, " +
+            "speedBytesPerSec = 0, etaSeconds = 0, localUri = :localUri, publicUri = :publicUri, " +
+            "stagingPath = :stagingPath, sha256 = :sha256, completedAt = :completedAt, errorMessage = NULL " +
+            "WHERE taskId = :taskId"
+    )
+    suspend fun markCompleted(
+        taskId: String,
+        totalBytes: Long,
+        localUri: String?,
+        publicUri: String?,
+        stagingPath: String,
+        sha256: String?,
+        completedAt: Long
+    )
+
+    @Query("UPDATE downloads SET sequentialTorrent = :sequential WHERE taskId = :taskId")
+    suspend fun setTorrentSequential(taskId: String, sequential: Boolean)
+
+    @Query("UPDATE downloads SET torrentFilesJson = :filesJson WHERE taskId = :taskId")
+    suspend fun updateTorrentFilesJson(taskId: String, filesJson: String)
+
+    @Query("UPDATE downloads SET fileName = :fileName, stagingPath = :stagingPath, localUri = :localUri, publicUri = :publicUri WHERE taskId = :taskId")
+    suspend fun updateFileLocations(
+        taskId: String,
+        fileName: String,
+        stagingPath: String,
+        localUri: String?,
+        publicUri: String?
+    )
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM downloads WHERE status IN ('completed', 'failed', 'cancelled')")
+    suspend fun clearFinished()
 
     @Query("DELETE FROM downloads")
     suspend fun clearAll()
@@ -227,7 +327,7 @@ interface ExtensionRecordDao {
         SavedIslandEntity::class,
         ExtensionRecordEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class SabDatabase : RoomDatabase() {
@@ -311,6 +411,36 @@ abstract class SabDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `taskId` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("UPDATE `downloads` SET `taskId` = 'legacy-' || `id` WHERE `taskId` = ''")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `kind` TEXT NOT NULL DEFAULT 'file'")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `status` TEXT NOT NULL DEFAULT 'completed'")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `downloadedBytes` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE `downloads` SET `downloadedBytes` = CASE WHEN `sizeBytes` > 0 THEN `sizeBytes` ELSE 0 END")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `speedBytesPerSec` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `etaSeconds` INTEGER NOT NULL DEFAULT -1")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `connectionsCount` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `supportsRange` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `stagingPath` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `publicUri` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `subfolder` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `etag` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `segmentsJson` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `torrentInfoHash` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `torrentFilesJson` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `torrentPeers` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `torrentSeeds` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `sequentialTorrent` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `wifiOnly` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `errorMessage` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `sha256` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `completedAt` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE `downloads` SET `completedAt` = `createdAt`")
+            }
+        }
+
         fun getInstance(context: Context): SabDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -318,7 +448,7 @@ abstract class SabDatabase : RoomDatabase() {
                     SabDatabase::class.java,
                     "sab_browser.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

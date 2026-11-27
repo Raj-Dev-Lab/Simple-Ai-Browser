@@ -3,6 +3,20 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.0] - 2026-11-26
+
+### Added
+- **Dedicated Multi-Engine Download Manager**: Added full-featured 4-tab Download Manager (`All` | `Torrents` | `Media` | `Files`) supporting any HTTP/HTTPS files, media streams, `.torrent` files, `magnet:` links, and open GeckoView `WebResponse` streams (blobs/authenticated downloads).
+- **Segmented Multi-Thread HTTP Engine (`OkHttp` + `RandomAccessFile`)**: Supports 1–16 parallel `Range` byte-segment connections with live thread segment inspection, ETags verification, pause/resume persistence across app restarts, KB/s bandwidth throttling, custom HTTP User-Agent, metered Wi-Fi-only queueing, and automatic Wi-Fi reconnect resume via `ConnectivityManager.NetworkCallback`.
+- **Native BitTorrent Engine (`libtorrent4j`)**: Full peer-to-peer BitTorrent & Magnet URI engine supporting DHT/LSD, sequential streaming piece order, per-file priority/selection toggles, live peer/seed counts, configurable upload/download limits, post-completion seeding toggle, and persistent resume state (`arm64-v8a` & `x86_64`).
+- **SAB File System & In-App File Explorer**: Added structured SAB Download Vault with full in-app directory browsing, folder creation, renaming, SHA-256 checksum verification, zero-permission `MediaStore.Downloads` export (`Downloads/Simple AI Browser`), custom Storage Access Framework (`OpenDocumentTree`) folder targeting, and `FileProvider` Open/Share intents.
+- **Page Media & Link Grabber (`sab-bridge` + Compat)**: Scans live web pages for embedded `<video>`, `<audio>`, `<img>`, `magnet:` links, and `.torrent` / downloadable media URLs with category filtering and batch downloading.
+- **Foreground Data-Sync Service & Comprehensive Settings**: Added `SabDownloadService` (`foregroundServiceType="dataSync"`) progress & completion notifications, confirmation prompts, auto-organization by type, and 18 customizable download preferences stored in DataStore.
+- **Full Privacy Shield & Hardening Suite**: Added configurable Enhanced Tracking Protection levels (`Off` / `Standard` / `Strict`), real HTTP `DNT: 1` & `Sec-GPC: 1` headers (`webRequest.onBeforeSendHeaders` in `sab-bridge` 1.3.0 + GeckoView `setGlobalPrivacyControl`), `navigator.doNotTrack` / `navigator.globalPrivacyControl` DOM signals, Total Cookie Protection (`dFPI`), unused tracker & bounce tracking cookie purging, URL tracking parameter stripping (`utm_*`, `fbclid`, `gclid`, `igshid`, etc. + *Copy Clean Link*), Fingerprinting Resistance, Local Network Access (LNA) Protection, Safe Browsing toggle, HTTPS-Only enforcement, Encrypted DNS over HTTPS (DoH presets: Cloudflare / Quad9 / AdGuard / Custom + Strict mode), Clear Cookies & History on Exit, and one-tap Cookie Purge inside both `PrivacyShieldSheet` and `SettingsScreen`.
+- **Built-in PDF Viewer (`SabPdfViewerOverlay`)**: Native Android `PdfRenderer` + `ParcelFileDescriptor` viewer with `LruCache` page rendering, support for local vault files, `content://` URIs, and HTTP PDFs, `1.0x–3.0x` zoom, page scrubber & jump dialog, Night Paper inverted reading mode, Share, and Open External fallback.
+- **Built-in Media Player (`SabMediaPlayerOverlay`)**: Hardware-accelerated `Media3 ExoPlayer 1.11.1` (`media3-exoplayer` + `media3-exoplayer-hls`) supporting local files, vault downloads, HTTP streams, and HLS `.m3u8` video/audio playback with custom Compose controls, ±10s seek, `0.5x–2.0x` playback speed, mute, loop, immersive fullscreen toggle, and lifecycle pause/release.
+- **GNU GPL v3.0 License & Author Attribution**: Switched repository license to GNU GPL v3.0 with Section 7(b) attribution preservation crediting **Tamal Mitra (`Raj-Dev-Lab`)**, updated `NOTICE`, `README.md`, and added in-app *License & Author Attribution* details inside Settings.
+
 ## [1.3.0] - 2026-11-26
 
 ### Added

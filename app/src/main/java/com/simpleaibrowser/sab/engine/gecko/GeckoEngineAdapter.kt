@@ -8,8 +8,12 @@ import android.view.ViewGroup
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
 import com.simpleaibrowser.sab.core.browser.BrowserExtensionsController
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
+import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
+import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.PrivacyConfig
 import com.simpleaibrowser.sab.core.browser.SessionCallbacks
+import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoRuntime
@@ -17,6 +21,8 @@ import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.StorageController
+import java.lang.ref.WeakReference
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "SabGeckoEngine"
@@ -24,7 +30,7 @@ internal const val SAB_NATIVE_APP = "sabBridge"
 
 /**
  * Production Mozilla GeckoView 161.0 (arm64-v8a & x86_64, Android 10+) adapter
- * implementing SAB's engine-agnostic BrowserEngine contract with full WebExtensions support.
+ * implementing SAB's engine-agnostic BrowserEngine contract with full WebExtensions & Privacy Suite support.
  */
 class GeckoEngineAdapter(
     context: Context
@@ -32,6 +38,10 @@ class GeckoEngineAdapter(
 
     private val appContext = context.applicationContext
     private val extensionReady = AtomicBoolean(false)
+    private val activeSessions = CopyOnWriteArrayList<WeakReference<GeckoTabSession>>()
+
+    @Volatile
+    private var currentPrivacyConfig: PrivacyConfig = PrivacyConfig()
 
     @Volatile
     private var runtimePromptHandler: ((WebPromptRequest) -> Unit)? = null
@@ -46,7 +56,7 @@ class GeckoEngineAdapter(
         sharedRuntime ?: createRuntime(appContext).also { sharedRuntime = it }
     }
 
-    private val geckoExtensionsController = GeckoExtensionsController(
+    private val geckoExtensionsController: GeckoExtensionsController = GeckoExtensionsController(
         runtime = runtime,
         onPromptRequested = { prompt ->
             runtimePromptHandler?.invoke(prompt) ?: prompt.cancelSilently()
@@ -56,6 +66,11 @@ class GeckoEngineAdapter(
         },
         onBuiltInReady = { ext ->
             extensionReady.set(true)
+            val cfg = currentPrivacyConfig
+            geckoExtensionsController.updatePrivacyHeaders(
+                doNotTrack = cfg.doNotTrackEnabled,
+                globalPrivacyControl = cfg.globalPrivacyControlEnabled
+            )
             Log.i(TAG, "Built-in sab-bridge v${ext.metaData.version} ready (private=${ext.metaData.allowedInPrivateBrowsing})")
         }
     )
@@ -73,7 +88,7 @@ class GeckoEngineAdapter(
                 abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a",
                 isGeckoViewActive = true,
                 builtInExtensionReady = extensionReady.get(),
-                notes = "GeckoView $geckoVer (${org.mozilla.geckoview.BuildConfig.OMNIJAR_NAME}) with WebExtensions, AMO/GitHub add-ons, ETP, and sab-bridge v1.2"
+                notes = "GeckoView $geckoVer (${org.mozilla.geckoview.BuildConfig.OMNIJAR_NAME}) with WebExtensions, Privacy Suite (ETP/GPC/DNT/DoH), and sab-bridge v1.3"
             )
         }
 
@@ -96,7 +111,7 @@ class GeckoEngineAdapter(
         runtimeNewTabHandler = { url, priv ->
             callbacks.onNewTabRequested(url, "", priv)
         }
-        return GeckoTabSession(
+        val session = GeckoTabSession(
             id = tabId,
             isPrivate = isPrivate,
             appContext = appContext,
@@ -104,6 +119,15 @@ class GeckoEngineAdapter(
             extensionsController = geckoExtensionsController,
             callbacks = callbacks
         )
+        val cfg = currentPrivacyConfig
+        session.applyPrivacySignals(
+            useTrackingProtection = cfg.isProtectionEnabled,
+            doNotTrack = cfg.doNotTrackEnabled,
+            globalPrivacyControl = cfg.globalPrivacyControlEnabled
+        )
+        activeSessions.removeAll { it.get() == null }
+        activeSessions.add(WeakReference(session))
+        return session
     }
 
     override fun setActiveSession(session: BrowserTabSession?) {
@@ -120,12 +144,112 @@ class GeckoEngineAdapter(
     }
 
     override fun setAdBlockEnabled(enabled: Boolean) {
-        val antiTracking = if (enabled) {
-            FULL_ANTI_TRACKING
-        } else {
-            ContentBlocking.AntiTracking.NONE
+        val level = if (enabled) TrackingProtectionLevel.STANDARD else TrackingProtectionLevel.OFF
+        applyPrivacyConfig(currentPrivacyConfig.copy(trackingProtectionLevel = level))
+    }
+
+    override fun applyPrivacyConfig(config: PrivacyConfig) {
+        currentPrivacyConfig = config
+        val cb = runtime.settings.contentBlocking
+        val rs = runtime.settings
+
+        val etpLevel = when (config.trackingProtectionLevel) {
+            TrackingProtectionLevel.OFF -> ContentBlocking.EtpLevel.NONE
+            TrackingProtectionLevel.STANDARD -> ContentBlocking.EtpLevel.DEFAULT
+            TrackingProtectionLevel.STRICT -> ContentBlocking.EtpLevel.STRICT
         }
-        runtime.settings.contentBlocking.setAntiTracking(antiTracking)
+        val antiTracking = when (config.trackingProtectionLevel) {
+            TrackingProtectionLevel.OFF -> ContentBlocking.AntiTracking.NONE
+            TrackingProtectionLevel.STANDARD ->
+                ContentBlocking.AntiTracking.DEFAULT or
+                    ContentBlocking.AntiTracking.CRYPTOMINING or
+                    (if (config.fingerprintingDefense) ContentBlocking.AntiTracking.FINGERPRINTING else 0)
+            TrackingProtectionLevel.STRICT ->
+                ContentBlocking.AntiTracking.STRICT or ContentBlocking.AntiTracking.EMAIL
+        }
+        val cookieBehavior = when (config.cookieIsolationMode) {
+            CookieIsolationMode.TOTAL_ISOLATE -> ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS
+            CookieIsolationMode.BLOCK_TRACKERS -> ContentBlocking.CookieBehavior.ACCEPT_NON_TRACKERS
+            CookieIsolationMode.FIRST_PARTY_ONLY -> ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY
+            CookieIsolationMode.BLOCK_ALL -> ContentBlocking.CookieBehavior.ACCEPT_NONE
+        }
+        val privateCookieBehavior = if (config.cookieIsolationMode == CookieIsolationMode.BLOCK_ALL) {
+            ContentBlocking.CookieBehavior.ACCEPT_NONE
+        } else {
+            ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS
+        }
+
+        runCatching { cb.setEnhancedTrackingProtectionLevel(etpLevel) }
+        runCatching { cb.setAntiTracking(antiTracking) }
+        runCatching { cb.setStrictSocialTrackingProtection(config.trackingProtectionLevel == TrackingProtectionLevel.STRICT) }
+        runCatching { cb.setEmailTrackerBlockingPrivateBrowsing(config.isProtectionEnabled) }
+        runCatching { cb.setCookieBehavior(cookieBehavior) }
+        runCatching { cb.setCookieBehaviorPrivateMode(privateCookieBehavior) }
+        runCatching { rs.setCookieBehaviorOptInPartitioning(config.cookieIsolationMode == CookieIsolationMode.TOTAL_ISOLATE) }
+        runCatching { rs.setCookieBehaviorOptInPartitioningPBM(true) }
+        runCatching { cb.setCookiePurging(config.cookiePurgingEnabled) }
+        runCatching { cb.setQueryParameterStrippingEnabled(config.stripTrackingParams) }
+        runCatching { cb.setQueryParameterStrippingPrivateBrowsingEnabled(config.stripTrackingParams) }
+        runCatching {
+            cb.setBounceTrackingProtectionMode(
+                if (config.bounceTrackingProtection) {
+                    ContentBlocking.BounceTrackingProtectionMode.BOUNCE_TRACKING_PROTECTION_MODE_ENABLED
+                } else {
+                    ContentBlocking.BounceTrackingProtectionMode.BOUNCE_TRACKING_PROTECTION_MODE_DISABLED
+                }
+            )
+        }
+        runCatching {
+            cb.setSafeBrowsing(
+                if (config.safeBrowsingEnabled) ContentBlocking.SafeBrowsing.DEFAULT
+                else ContentBlocking.SafeBrowsing.NONE
+            )
+        }
+
+        runCatching { rs.setGlobalPrivacyControl(config.globalPrivacyControlEnabled) }
+        runCatching { rs.setFingerprintingProtection(config.fingerprintingDefense) }
+        runCatching { rs.setFingerprintingProtectionPrivateBrowsing(config.fingerprintingDefense) }
+        runCatching { rs.setBaselineFingerprintingProtection(config.fingerprintingDefense) }
+        runCatching { rs.setLnaBlocking(config.localNetworkProtection) }
+        runCatching { rs.setLnaBlockTrackers(config.localNetworkProtection) }
+        runCatching {
+            rs.setAllowInsecureConnections(
+                if (config.httpsOnlyEnabled) GeckoRuntimeSettings.HTTPS_ONLY
+                else GeckoRuntimeSettings.ALLOW_ALL
+            )
+        }
+
+        val dohUri = when (config.dnsOverHttpsMode) {
+            DnsOverHttpsMode.OFF -> ""
+            DnsOverHttpsMode.CUSTOM -> config.customDohUrl.trim()
+            else -> config.dnsOverHttpsMode.resolverUri
+        }
+        val trrMode = if (config.dnsOverHttpsMode == DnsOverHttpsMode.OFF || dohUri.isBlank()) {
+            GeckoRuntimeSettings.TRR_MODE_OFF
+        } else if (config.dohStrict) {
+            GeckoRuntimeSettings.TRR_MODE_ONLY
+        } else {
+            GeckoRuntimeSettings.TRR_MODE_FIRST
+        }
+        runCatching {
+            rs.setTrustedRecursiveResolverMode(trrMode)
+            if (dohUri.isNotBlank()) {
+                rs.setTrustedRecursiveResolverUri(dohUri)
+            }
+        }
+
+        geckoExtensionsController.updatePrivacyHeaders(
+            doNotTrack = config.doNotTrackEnabled,
+            globalPrivacyControl = config.globalPrivacyControlEnabled
+        )
+
+        activeSessions.forEach { ref ->
+            ref.get()?.applyPrivacySignals(
+                useTrackingProtection = config.isProtectionEnabled,
+                doNotTrack = config.doNotTrackEnabled,
+                globalPrivacyControl = config.globalPrivacyControlEnabled
+            )
+        }
     }
 
     override fun setPreferredDarkScheme(isDark: Boolean) {
@@ -140,6 +264,12 @@ class GeckoEngineAdapter(
         runtime.storageController.clearData(StorageController.ClearFlags.ALL)
     }
 
+    override fun clearCookiesOnly() {
+        val cookieFlags = StorageController.ClearFlags.COOKIES or
+            StorageController.ClearFlags.DOM_STORAGES
+        runtime.storageController.clearData(cookieFlags)
+    }
+
     override fun clearHistoryAndCachesOnly() {
         val cacheFlags = StorageController.ClearFlags.ALL_CACHES or
             StorageController.ClearFlags.NETWORK_CACHE or
@@ -149,9 +279,17 @@ class GeckoEngineAdapter(
 
     private fun createRuntime(context: Context): GeckoRuntime {
         val contentBlocking = ContentBlocking.Settings.Builder()
+            .enhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.DEFAULT)
             .antiTracking(FULL_ANTI_TRACKING)
             .safeBrowsing(ContentBlocking.SafeBrowsing.DEFAULT)
-            .cookieBehavior(ContentBlocking.CookieBehavior.ACCEPT_NON_TRACKERS)
+            .cookieBehavior(ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS)
+            .cookieBehaviorPrivateMode(ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS)
+            .cookiePurging(true)
+            .queryParameterStrippingEnabled(true)
+            .queryParameterStrippingPrivateBrowsingEnabled(true)
+            .bounceTrackingProtectionMode(
+                ContentBlocking.BounceTrackingProtectionMode.BOUNCE_TRACKING_PROTECTION_MODE_ENABLED
+            )
             .build()
 
         val settings = GeckoRuntimeSettings.Builder()
@@ -159,6 +297,7 @@ class GeckoEngineAdapter(
             .webFontsEnabled(true)
             .automaticFontSizeAdjustment(true)
             .preferredColorScheme(GeckoRuntimeSettings.COLOR_SCHEME_DARK)
+            .globalPrivacyControlEnabled(true)
             .contentBlocking(contentBlocking)
             .extensionsWebAPIEnabled(true)
             .extensionsProcessEnabled(true)
@@ -172,9 +311,7 @@ class GeckoEngineAdapter(
         private var sharedRuntime: GeckoRuntime? = null
 
         private const val FULL_ANTI_TRACKING =
-            ContentBlocking.AntiTracking.AD or
-                ContentBlocking.AntiTracking.ANALYTIC or
-                ContentBlocking.AntiTracking.SOCIAL or
+            ContentBlocking.AntiTracking.DEFAULT or
                 ContentBlocking.AntiTracking.CRYPTOMINING or
                 ContentBlocking.AntiTracking.FINGERPRINTING
     }

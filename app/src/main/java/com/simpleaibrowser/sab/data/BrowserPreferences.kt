@@ -11,8 +11,14 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.simpleaibrowser.sab.core.browser.AddressBarPosition
+import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
+import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
+import com.simpleaibrowser.sab.core.browser.DownloadManagerSettings
+import com.simpleaibrowser.sab.core.browser.PrivacyConfig
 import com.simpleaibrowser.sab.core.browser.SearchEngine
+import com.simpleaibrowser.sab.core.browser.StorageLocationMode
 import com.simpleaibrowser.sab.core.browser.ThemePreset
+import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -22,6 +28,20 @@ private val Context.sabDataStore: DataStore<Preferences> by preferencesDataStore
 
 data class BrowserSettings(
     val adBlockEnabled: Boolean = true,
+    val trackingProtectionLevel: TrackingProtectionLevel = TrackingProtectionLevel.STANDARD,
+    val doNotTrackEnabled: Boolean = true,
+    val globalPrivacyControlEnabled: Boolean = true,
+    val cookieIsolationMode: CookieIsolationMode = CookieIsolationMode.TOTAL_ISOLATE,
+    val cookiePurgingEnabled: Boolean = true,
+    val stripTrackingParams: Boolean = true,
+    val bounceTrackingProtection: Boolean = true,
+    val fingerprintingDefense: Boolean = true,
+    val localNetworkProtection: Boolean = true,
+    val safeBrowsingEnabled: Boolean = true,
+    val dnsOverHttpsMode: DnsOverHttpsMode = DnsOverHttpsMode.OFF,
+    val customDohUrl: String = "",
+    val dohStrict: Boolean = false,
+    val clearPrivateDataOnExit: Boolean = false,
     val httpsOnlyEnabled: Boolean = true,
     val forceDarkDefault: Boolean = false,
     val searchEngine: SearchEngine = SearchEngine.DUCKDUCKGO,
@@ -32,8 +52,26 @@ data class BrowserSettings(
     val totalBlockedTrackers: Long = 0L,
     val showWallpaperOnStart: Boolean = true,
     val autoUpdateExtensions: Boolean = true,
-    val lastExtensionUpdateCheckAt: Long = 0L
-)
+    val lastExtensionUpdateCheckAt: Long = 0L,
+    val downloadSettings: DownloadManagerSettings = DownloadManagerSettings()
+) {
+    fun toPrivacyConfig(): PrivacyConfig = PrivacyConfig(
+        trackingProtectionLevel = if (!adBlockEnabled) TrackingProtectionLevel.OFF else trackingProtectionLevel,
+        doNotTrackEnabled = doNotTrackEnabled,
+        globalPrivacyControlEnabled = globalPrivacyControlEnabled,
+        cookieIsolationMode = cookieIsolationMode,
+        cookiePurgingEnabled = cookiePurgingEnabled,
+        stripTrackingParams = stripTrackingParams,
+        bounceTrackingProtection = bounceTrackingProtection,
+        fingerprintingDefense = fingerprintingDefense,
+        localNetworkProtection = localNetworkProtection,
+        safeBrowsingEnabled = safeBrowsingEnabled,
+        httpsOnlyEnabled = httpsOnlyEnabled,
+        dnsOverHttpsMode = dnsOverHttpsMode,
+        customDohUrl = customDohUrl,
+        dohStrict = dohStrict
+    )
+}
 
 class BrowserPreferences(private val context: Context) {
     private object Keys {
@@ -49,6 +87,42 @@ class BrowserPreferences(private val context: Context) {
         val SHOW_WALLPAPER = booleanPreferencesKey("show_wallpaper_on_start")
         val AUTO_UPDATE_EXTENSIONS = booleanPreferencesKey("auto_update_extensions")
         val LAST_EXTENSION_CHECK = longPreferencesKey("last_extension_update_check_at")
+
+        // Download Manager Keys
+        val DL_ASK_BEFORE = booleanPreferencesKey("dl_ask_before")
+        val DL_THREADS = intPreferencesKey("dl_default_threads")
+        val DL_MAX_CONCURRENT = intPreferencesKey("dl_max_concurrent")
+        val DL_WIFI_ONLY = booleanPreferencesKey("dl_wifi_only")
+        val DL_SPEED_LIMIT_KBPS = intPreferencesKey("dl_speed_limit_kbps")
+        val DL_AUTO_RESUME = booleanPreferencesKey("dl_auto_resume")
+        val DL_STORAGE_MODE = stringPreferencesKey("dl_storage_mode")
+        val DL_CUSTOM_TREE_URI = stringPreferencesKey("dl_custom_tree_uri")
+        val DL_CUSTOM_TREE_LABEL = stringPreferencesKey("dl_custom_tree_label")
+        val DL_AUTO_ORGANIZE = booleanPreferencesKey("dl_auto_organize_by_type")
+        val DL_NOTIFY_COMPLETE = booleanPreferencesKey("dl_notify_complete")
+        val DL_TORRENT_SEQUENTIAL = booleanPreferencesKey("dl_torrent_sequential")
+        val DL_TORRENT_SEED = booleanPreferencesKey("dl_torrent_seed")
+        val DL_TORRENT_MAX_CONN = intPreferencesKey("dl_torrent_max_conn")
+        val DL_TORRENT_DL_LIMIT = intPreferencesKey("dl_torrent_dl_limit_kbps")
+        val DL_TORRENT_UL_LIMIT = intPreferencesKey("dl_torrent_ul_limit_kbps")
+        val DL_TORRENT_DHT = booleanPreferencesKey("dl_torrent_enable_dht")
+        val DL_USER_AGENT = stringPreferencesKey("dl_custom_user_agent")
+
+        // Privacy Suite Keys
+        val PRIV_TRACKING_LEVEL = stringPreferencesKey("priv_tracking_level")
+        val PRIV_DNT = booleanPreferencesKey("priv_do_not_track")
+        val PRIV_GPC = booleanPreferencesKey("priv_global_privacy_control")
+        val PRIV_COOKIE_MODE = stringPreferencesKey("priv_cookie_isolation_mode")
+        val PRIV_COOKIE_PURGE = booleanPreferencesKey("priv_cookie_purging")
+        val PRIV_STRIP_PARAMS = booleanPreferencesKey("priv_strip_tracking_params")
+        val PRIV_BOUNCE = booleanPreferencesKey("priv_bounce_tracking")
+        val PRIV_FINGERPRINT = booleanPreferencesKey("priv_fingerprinting_defense")
+        val PRIV_LNA = booleanPreferencesKey("priv_local_network_protection")
+        val PRIV_SAFE_BROWSING = booleanPreferencesKey("priv_safe_browsing")
+        val PRIV_DOH_MODE = stringPreferencesKey("priv_doh_mode")
+        val PRIV_DOH_CUSTOM_URL = stringPreferencesKey("priv_doh_custom_url")
+        val PRIV_DOH_STRICT = booleanPreferencesKey("priv_doh_strict")
+        val PRIV_CLEAR_ON_EXIT = booleanPreferencesKey("priv_clear_on_exit")
     }
 
     val settingsFlow: Flow<BrowserSettings> = context.sabDataStore.data
@@ -60,8 +134,31 @@ class BrowserPreferences(private val context: Context) {
             }
         }
         .map { prefs ->
+            val adBlock = prefs[Keys.AD_BLOCK] ?: true
+            val trackingLevel = prefs[Keys.PRIV_TRACKING_LEVEL]?.let {
+                TrackingProtectionLevel.fromId(it)
+            } ?: if (adBlock) TrackingProtectionLevel.STANDARD else TrackingProtectionLevel.OFF
+
             BrowserSettings(
-                adBlockEnabled = prefs[Keys.AD_BLOCK] ?: true,
+                adBlockEnabled = trackingLevel != TrackingProtectionLevel.OFF && adBlock,
+                trackingProtectionLevel = trackingLevel,
+                doNotTrackEnabled = prefs[Keys.PRIV_DNT] ?: true,
+                globalPrivacyControlEnabled = prefs[Keys.PRIV_GPC] ?: true,
+                cookieIsolationMode = CookieIsolationMode.fromId(
+                    prefs[Keys.PRIV_COOKIE_MODE] ?: CookieIsolationMode.TOTAL_ISOLATE.id
+                ),
+                cookiePurgingEnabled = prefs[Keys.PRIV_COOKIE_PURGE] ?: true,
+                stripTrackingParams = prefs[Keys.PRIV_STRIP_PARAMS] ?: true,
+                bounceTrackingProtection = prefs[Keys.PRIV_BOUNCE] ?: true,
+                fingerprintingDefense = prefs[Keys.PRIV_FINGERPRINT] ?: true,
+                localNetworkProtection = prefs[Keys.PRIV_LNA] ?: true,
+                safeBrowsingEnabled = prefs[Keys.PRIV_SAFE_BROWSING] ?: true,
+                dnsOverHttpsMode = DnsOverHttpsMode.fromId(
+                    prefs[Keys.PRIV_DOH_MODE] ?: DnsOverHttpsMode.OFF.id
+                ),
+                customDohUrl = prefs[Keys.PRIV_DOH_CUSTOM_URL].orEmpty(),
+                dohStrict = prefs[Keys.PRIV_DOH_STRICT] ?: false,
+                clearPrivateDataOnExit = prefs[Keys.PRIV_CLEAR_ON_EXIT] ?: false,
                 httpsOnlyEnabled = prefs[Keys.HTTPS_ONLY] ?: true,
                 forceDarkDefault = prefs[Keys.FORCE_DARK] ?: false,
                 searchEngine = SearchEngine.fromId(prefs[Keys.SEARCH_ENGINE] ?: SearchEngine.DUCKDUCKGO.id),
@@ -74,12 +171,98 @@ class BrowserPreferences(private val context: Context) {
                 totalBlockedTrackers = prefs[Keys.TOTAL_BLOCKED] ?: 0L,
                 showWallpaperOnStart = prefs[Keys.SHOW_WALLPAPER] ?: true,
                 autoUpdateExtensions = prefs[Keys.AUTO_UPDATE_EXTENSIONS] ?: true,
-                lastExtensionUpdateCheckAt = prefs[Keys.LAST_EXTENSION_CHECK] ?: 0L
+                lastExtensionUpdateCheckAt = prefs[Keys.LAST_EXTENSION_CHECK] ?: 0L,
+                downloadSettings = DownloadManagerSettings(
+                    askBeforeDownloading = prefs[Keys.DL_ASK_BEFORE] ?: false,
+                    defaultConnectionsPerDownload = (prefs[Keys.DL_THREADS] ?: 4).coerceIn(1, 16),
+                    maxConcurrentDownloads = (prefs[Keys.DL_MAX_CONCURRENT] ?: 3).coerceIn(1, 6),
+                    wifiOnlyDownloads = prefs[Keys.DL_WIFI_ONLY] ?: false,
+                    speedLimitKbps = (prefs[Keys.DL_SPEED_LIMIT_KBPS] ?: 0).coerceAtLeast(0),
+                    autoResumeOnReconnect = prefs[Keys.DL_AUTO_RESUME] ?: true,
+                    storageLocationMode = StorageLocationMode.fromId(
+                        prefs[Keys.DL_STORAGE_MODE] ?: StorageLocationMode.PUBLIC_DOWNLOADS.id
+                    ),
+                    customTreeUri = prefs[Keys.DL_CUSTOM_TREE_URI]?.takeIf { it.isNotBlank() },
+                    customTreeLabel = prefs[Keys.DL_CUSTOM_TREE_LABEL]?.takeIf { it.isNotBlank() },
+                    autoOrganizeByType = prefs[Keys.DL_AUTO_ORGANIZE] ?: false,
+                    notifyOnComplete = prefs[Keys.DL_NOTIFY_COMPLETE] ?: true,
+                    torrentSequentialDefault = prefs[Keys.DL_TORRENT_SEQUENTIAL] ?: false,
+                    torrentSeedAfterComplete = prefs[Keys.DL_TORRENT_SEED] ?: false,
+                    torrentMaxConnections = (prefs[Keys.DL_TORRENT_MAX_CONN] ?: 200).coerceIn(20, 500),
+                    torrentDownloadLimitKbps = (prefs[Keys.DL_TORRENT_DL_LIMIT] ?: 0).coerceAtLeast(0),
+                    torrentUploadLimitKbps = (prefs[Keys.DL_TORRENT_UL_LIMIT] ?: 128).coerceAtLeast(0),
+                    torrentEnableDht = prefs[Keys.DL_TORRENT_DHT] ?: true,
+                    customUserAgent = prefs[Keys.DL_USER_AGENT].orEmpty()
+                )
             )
         }
 
     suspend fun setAdBlockEnabled(enabled: Boolean) {
-        context.sabDataStore.edit { it[Keys.AD_BLOCK] = enabled }
+        context.sabDataStore.edit { prefs ->
+            prefs[Keys.AD_BLOCK] = enabled
+            if (!enabled) {
+                prefs[Keys.PRIV_TRACKING_LEVEL] = TrackingProtectionLevel.OFF.id
+            } else if (prefs[Keys.PRIV_TRACKING_LEVEL] == TrackingProtectionLevel.OFF.id ||
+                prefs[Keys.PRIV_TRACKING_LEVEL] == null
+            ) {
+                prefs[Keys.PRIV_TRACKING_LEVEL] = TrackingProtectionLevel.STANDARD.id
+            }
+        }
+    }
+
+    suspend fun setTrackingProtectionLevel(level: TrackingProtectionLevel) {
+        context.sabDataStore.edit { prefs ->
+            prefs[Keys.PRIV_TRACKING_LEVEL] = level.id
+            prefs[Keys.AD_BLOCK] = level != TrackingProtectionLevel.OFF
+        }
+    }
+
+    suspend fun setDoNotTrackEnabled(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_DNT] = enabled }
+    }
+
+    suspend fun setGlobalPrivacyControlEnabled(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_GPC] = enabled }
+    }
+
+    suspend fun setCookieIsolationMode(mode: CookieIsolationMode) {
+        context.sabDataStore.edit { it[Keys.PRIV_COOKIE_MODE] = mode.id }
+    }
+
+    suspend fun setCookiePurgingEnabled(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_COOKIE_PURGE] = enabled }
+    }
+
+    suspend fun setStripTrackingParams(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_STRIP_PARAMS] = enabled }
+    }
+
+    suspend fun setBounceTrackingProtection(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_BOUNCE] = enabled }
+    }
+
+    suspend fun setFingerprintingDefense(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_FINGERPRINT] = enabled }
+    }
+
+    suspend fun setLocalNetworkProtection(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_LNA] = enabled }
+    }
+
+    suspend fun setSafeBrowsingEnabled(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_SAFE_BROWSING] = enabled }
+    }
+
+    suspend fun setDnsOverHttpsConfig(mode: DnsOverHttpsMode, customUrl: String, strict: Boolean) {
+        context.sabDataStore.edit { prefs ->
+            prefs[Keys.PRIV_DOH_MODE] = mode.id
+            prefs[Keys.PRIV_DOH_CUSTOM_URL] = customUrl.trim()
+            prefs[Keys.PRIV_DOH_STRICT] = strict
+        }
+    }
+
+    suspend fun setClearPrivateDataOnExit(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.PRIV_CLEAR_ON_EXIT] = enabled }
     }
 
     suspend fun setHttpsOnlyEnabled(enabled: Boolean) {
@@ -120,6 +303,52 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setLastExtensionUpdateCheckAt(timestamp: Long) {
         context.sabDataStore.edit { it[Keys.LAST_EXTENSION_CHECK] = timestamp }
+    }
+
+    suspend fun updateDownloadSettings(transform: (DownloadManagerSettings) -> DownloadManagerSettings) {
+        context.sabDataStore.edit { prefs ->
+            val current = DownloadManagerSettings(
+                askBeforeDownloading = prefs[Keys.DL_ASK_BEFORE] ?: false,
+                defaultConnectionsPerDownload = (prefs[Keys.DL_THREADS] ?: 4).coerceIn(1, 16),
+                maxConcurrentDownloads = (prefs[Keys.DL_MAX_CONCURRENT] ?: 3).coerceIn(1, 6),
+                wifiOnlyDownloads = prefs[Keys.DL_WIFI_ONLY] ?: false,
+                speedLimitKbps = (prefs[Keys.DL_SPEED_LIMIT_KBPS] ?: 0).coerceAtLeast(0),
+                autoResumeOnReconnect = prefs[Keys.DL_AUTO_RESUME] ?: true,
+                storageLocationMode = StorageLocationMode.fromId(
+                    prefs[Keys.DL_STORAGE_MODE] ?: StorageLocationMode.PUBLIC_DOWNLOADS.id
+                ),
+                customTreeUri = prefs[Keys.DL_CUSTOM_TREE_URI]?.takeIf { it.isNotBlank() },
+                customTreeLabel = prefs[Keys.DL_CUSTOM_TREE_LABEL]?.takeIf { it.isNotBlank() },
+                autoOrganizeByType = prefs[Keys.DL_AUTO_ORGANIZE] ?: false,
+                notifyOnComplete = prefs[Keys.DL_NOTIFY_COMPLETE] ?: true,
+                torrentSequentialDefault = prefs[Keys.DL_TORRENT_SEQUENTIAL] ?: false,
+                torrentSeedAfterComplete = prefs[Keys.DL_TORRENT_SEED] ?: false,
+                torrentMaxConnections = (prefs[Keys.DL_TORRENT_MAX_CONN] ?: 200).coerceIn(20, 500),
+                torrentDownloadLimitKbps = (prefs[Keys.DL_TORRENT_DL_LIMIT] ?: 0).coerceAtLeast(0),
+                torrentUploadLimitKbps = (prefs[Keys.DL_TORRENT_UL_LIMIT] ?: 128).coerceAtLeast(0),
+                torrentEnableDht = prefs[Keys.DL_TORRENT_DHT] ?: true,
+                customUserAgent = prefs[Keys.DL_USER_AGENT].orEmpty()
+            )
+            val next = transform(current)
+            prefs[Keys.DL_ASK_BEFORE] = next.askBeforeDownloading
+            prefs[Keys.DL_THREADS] = next.defaultConnectionsPerDownload.coerceIn(1, 16)
+            prefs[Keys.DL_MAX_CONCURRENT] = next.maxConcurrentDownloads.coerceIn(1, 6)
+            prefs[Keys.DL_WIFI_ONLY] = next.wifiOnlyDownloads
+            prefs[Keys.DL_SPEED_LIMIT_KBPS] = next.speedLimitKbps.coerceAtLeast(0)
+            prefs[Keys.DL_AUTO_RESUME] = next.autoResumeOnReconnect
+            prefs[Keys.DL_STORAGE_MODE] = next.storageLocationMode.id
+            prefs[Keys.DL_CUSTOM_TREE_URI] = next.customTreeUri.orEmpty()
+            prefs[Keys.DL_CUSTOM_TREE_LABEL] = next.customTreeLabel.orEmpty()
+            prefs[Keys.DL_AUTO_ORGANIZE] = next.autoOrganizeByType
+            prefs[Keys.DL_NOTIFY_COMPLETE] = next.notifyOnComplete
+            prefs[Keys.DL_TORRENT_SEQUENTIAL] = next.torrentSequentialDefault
+            prefs[Keys.DL_TORRENT_SEED] = next.torrentSeedAfterComplete
+            prefs[Keys.DL_TORRENT_MAX_CONN] = next.torrentMaxConnections.coerceIn(20, 500)
+            prefs[Keys.DL_TORRENT_DL_LIMIT] = next.torrentDownloadLimitKbps.coerceAtLeast(0)
+            prefs[Keys.DL_TORRENT_UL_LIMIT] = next.torrentUploadLimitKbps.coerceAtLeast(0)
+            prefs[Keys.DL_TORRENT_DHT] = next.torrentEnableDht
+            prefs[Keys.DL_USER_AGENT] = next.customUserAgent
+        }
     }
 
     suspend fun incrementBlockedTrackers(delta: Long = 1L) {

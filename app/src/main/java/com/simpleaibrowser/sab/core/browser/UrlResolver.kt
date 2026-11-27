@@ -99,6 +99,88 @@ object UrlResolver {
         else -> SecurityState.INSECURE
     }
 
+    private val exactTrackingParams = setOf(
+        "fbclid", "gclid", "gbraid", "wbraid", "dclid", "msclkid",
+        "mc_cid", "mc_eid", "yclid", "ysclid", "_hsenc", "_hsmi",
+        "hsctatracking", "igshid", "igsh", "si", "mkt_tok",
+        "_openstat", "vero_id", "oly_enc_id", "oly_anon_id",
+        "__s", "rb_clickid", "s_kwcid", "wickedid", "twclid", "spm"
+    )
+
+    /**
+     * Strips cross-site ad/campaign tracking parameters from HTTP/HTTPS URLs
+     * while preserving real application parameters and URL fragments intact.
+     */
+    fun stripTrackingParameters(rawUrl: String): String {
+        val trimmed = rawUrl.trim()
+        if (!trimmed.startsWith("http://", ignoreCase = true) &&
+            !trimmed.startsWith("https://", ignoreCase = true)
+        ) {
+            return rawUrl
+        }
+        val hashIndex = trimmed.indexOf('#')
+        val withoutFragment = if (hashIndex >= 0) trimmed.substring(0, hashIndex) else trimmed
+        val fragment = if (hashIndex >= 0) trimmed.substring(hashIndex) else ""
+
+        val queryIndex = withoutFragment.indexOf('?')
+        if (queryIndex < 0) return rawUrl
+
+        val base = withoutFragment.substring(0, queryIndex)
+        val rawQuery = withoutFragment.substring(queryIndex + 1)
+        if (rawQuery.isBlank()) return base + fragment
+
+        var removedAny = false
+        val kept = mutableListOf<String>()
+        for (pair in rawQuery.split('&')) {
+            if (pair.isEmpty()) continue
+            val eq = pair.indexOf('=')
+            val rawKey = if (eq >= 0) pair.substring(0, eq) else pair
+            val decodedKey = runCatching {
+                URLDecoder.decode(rawKey, StandardCharsets.UTF_8.name())
+            }.getOrDefault(rawKey).lowercase()
+            if (decodedKey.startsWith("utm_") || decodedKey in exactTrackingParams) {
+                removedAny = true
+            } else {
+                kept.add(pair)
+            }
+        }
+        if (!removedAny) return rawUrl
+        return if (kept.isEmpty()) {
+            base + fragment
+        } else {
+            "$base?${kept.joinToString("&")}$fragment"
+        }
+    }
+
+    fun isPdfTarget(urlOrFileName: String, mimeType: String?): Boolean {
+        val cleanMime = mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+        if (cleanMime == "application/pdf") return true
+        val pathOnly = urlOrFileName.substringBefore('?').substringBefore('#').lowercase()
+        return pathOnly.endsWith(".pdf")
+    }
+
+    /**
+     * Returns Pair(isSupportedInBuiltInPlayer, isVideo).
+     */
+    fun classifyPlayableMedia(urlOrFileName: String, mimeType: String?): Pair<Boolean, Boolean> {
+        val cleanMime = mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+        if (cleanMime.startsWith("video/") || cleanMime == "application/vnd.apple.mpegurl" || cleanMime == "application/x-mpegurl") {
+            return true to true
+        }
+        if (cleanMime.startsWith("audio/")) {
+            return true to false
+        }
+        val pathOnly = urlOrFileName.substringBefore('?').substringBefore('#').lowercase()
+        val ext = pathOnly.substringAfterLast('.', "")
+        if (ext in setOf("mp4", "mkv", "webm", "mov", "m4v", "3gp", "ts", "m3u8")) {
+            return true to true
+        }
+        if (ext in setOf("mp3", "m4a", "aac", "flac", "ogg", "opus", "wav")) {
+            return true to false
+        }
+        return false to false
+    }
+
     private fun isLocalHost(url: String): Boolean {
         val lower = url.lowercase()
         return lower.startsWith("http://localhost") ||

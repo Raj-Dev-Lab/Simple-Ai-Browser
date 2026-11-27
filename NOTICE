@@ -1,0 +1,34 @@
+Simple AI Browser (SAB)
+Copyright (C) 2026 Tamal Mitra (Raj-Dev-Lab)
+Project Repository: https://github.com/Raj-Dev-Lab/Simple-Ai-Browser
+
+===============================================================================
+AUTHOR ATTRIBUTION NOTICE
+===============================================================================
+Simple AI Browser (SAB) was created and is owned by Tamal Mitra (Raj-Dev-Lab).
+
+Under the GNU General Public License v3.0 (GPL-3.0) and Section 7(b)
+attribution preservation terms:
+1. All source and binary redistributions, forks, modified APKs, or derivative
+   projects MUST retain this NOTICE file and the copyright notices crediting
+   Tamal Mitra (Raj-Dev-Lab).
+2. Derivative works MUST clearly document modifications made to the original
+   software and distribute source code under GPL-3.0.
+3. Trademarks, app branding ("Simple AI Browser", "SAB"), and signing keys
+   belong to Tamal Mitra (Raj-Dev-Lab) and may not be used to misrepresent
+   unofficial forks as official releases.
+
+===============================================================================
+THIRD-PARTY SOFTWARE NOTICES
+===============================================================================
+1. Mozilla GeckoView (`org.mozilla.geckoview:geckoview`)
+   License: Mozilla Public License, v. 2.0 (MPL-2.0)
+   Source:  https://mozilla.org/MPL/2.0/
+
+2. libtorrent4j (`org.libtorrent4j:libtorrent4j*`)
+   License: MIT License
+   Source:  https://github.com/aldenml/libtorrent4j
+
+3. Jetpack / AndroidX, Kotlin, Room, DataStore, Coil, OkHttp
+   License: Apache License, Version 2.0
+   Source:  https://www.apache.org/licenses/LICENSE-2.0

@@ -21,10 +21,15 @@ import android.widget.FrameLayout
 import com.simpleaibrowser.sab.core.browser.AdBlockFilterList
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
+import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
+import com.simpleaibrowser.sab.core.browser.DetectedPageMedia
+import com.simpleaibrowser.sab.core.browser.DownloadKind
 import com.simpleaibrowser.sab.core.browser.DownloadRequest
+import com.simpleaibrowser.sab.core.browser.DownloadSourceType
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.FindInPageResult
 import com.simpleaibrowser.sab.core.browser.PageContextSnapshot
+import com.simpleaibrowser.sab.core.browser.PrivacyConfig
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SecurityState
 import com.simpleaibrowser.sab.core.browser.SessionCallbacks
@@ -35,9 +40,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import java.io.ByteArrayInputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 
 /**
  * Compatibility fallback adapter implementing BrowserEngine if native GeckoView
@@ -48,6 +57,9 @@ class CompatWebViewEngine(
     private val context: Context,
     private val fallbackReason: String
 ) : BrowserEngine {
+
+    @Volatile
+    private var privacyConfig = PrivacyConfig()
 
     private val adBlockEnabled = AtomicBoolean(true)
 
@@ -81,12 +93,22 @@ class CompatWebViewEngine(
             isPrivate = isPrivate,
             context = context.applicationContext,
             adBlockEnabled = { adBlockEnabled.get() },
+            privacyConfigProvider = { privacyConfig },
             callbacks = callbacks
         )
     }
 
     override fun setAdBlockEnabled(enabled: Boolean) {
         adBlockEnabled.set(enabled)
+    }
+
+    override fun applyPrivacyConfig(config: PrivacyConfig) {
+        privacyConfig = config
+        adBlockEnabled.set(config.isProtectionEnabled)
+        runCatching {
+            val cm = CookieManager.getInstance()
+            cm.setAcceptCookie(config.cookieIsolationMode != CookieIsolationMode.BLOCK_ALL)
+        }
     }
 
     override fun setPreferredDarkScheme(isDark: Boolean) {
@@ -97,6 +119,11 @@ class CompatWebViewEngine(
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
         WebStorage.getInstance().deleteAllData()
+    }
+
+    override fun clearCookiesOnly() {
+        CookieManager.getInstance().removeAllCookies(null)
+        CookieManager.getInstance().flush()
     }
 
     override fun clearHistoryAndCachesOnly() {
@@ -110,6 +137,7 @@ private class CompatWebViewTabSession(
     override val isPrivate: Boolean,
     private val context: Context,
     private val adBlockEnabled: () -> Boolean,
+    private val privacyConfigProvider: () -> PrivacyConfig,
     private val callbacks: SessionCallbacks
 ) : BrowserTabSession {
 
@@ -139,18 +167,34 @@ private class CompatWebViewTabSession(
         settings.builtInZoomControls = true
         settings.displayZoomControls = false
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        runCatching { settings.safeBrowsingEnabled = privacyConfigProvider().safeBrowsingEnabled }
+        runCatching {
+            val mode = privacyConfigProvider().cookieIsolationMode
+            CookieManager.getInstance().setAcceptThirdPartyCookies(
+                this,
+                mode == CookieIsolationMode.BLOCK_TRACKERS
+            )
+        }
         if (isPrivate) {
             settings.cacheMode = WebSettings.LOAD_NO_CACHE
         }
         defaultUserAgent = settings.userAgentString
         setDownloadListener { url, _, _, mimeType, contentLength ->
             if (url.isNullOrBlank()) return@setDownloadListener
+            val fileName = UrlResolver.guessFileName(url, mimeType)
+            val srcType = if (url.startsWith("magnet:", ignoreCase = true)) {
+                DownloadSourceType.MAGNET
+            } else {
+                DownloadSourceType.HTTP
+            }
             callbacks.onDownloadRequested(
                 DownloadRequest(
                     url = url,
-                    fileName = UrlResolver.guessFileName(url, mimeType),
+                    fileName = fileName,
                     mimeType = mimeType,
-                    contentLength = contentLength
+                    contentLength = contentLength,
+                    sourceType = srcType,
+                    referrerUrl = _state.value.url.takeIf { it.startsWith("http") }
                 )
             )
         }
@@ -163,6 +207,26 @@ private class CompatWebViewTabSession(
             )
         }
         webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
+                val uri = request?.url?.toString().orEmpty()
+                if (uri.startsWith("magnet:", ignoreCase = true)) {
+                    callbacks.onDownloadRequested(
+                        DownloadRequest(
+                            url = uri,
+                            fileName = UrlResolver.guessFileName(uri, "application/x-bittorrent"),
+                            mimeType = "application/x-bittorrent",
+                            sourceType = DownloadSourceType.MAGNET,
+                            referrerUrl = _state.value.url
+                        )
+                    )
+                    return true
+                }
+                return false
+            }
+
             override fun shouldInterceptRequest(
                 view: WebView?,
                 request: WebResourceRequest?
@@ -335,7 +399,23 @@ private class CompatWebViewTabSession(
                 securityState = UrlResolver.securityForUrl(url)
             )
         }
-        webView.loadUrl(url)
+        val cfg = privacyConfigProvider()
+        runCatching { webView.settings.safeBrowsingEnabled = cfg.safeBrowsingEnabled }
+        runCatching {
+            CookieManager.getInstance().setAcceptThirdPartyCookies(
+                webView,
+                cfg.cookieIsolationMode == CookieIsolationMode.BLOCK_TRACKERS
+            )
+        }
+        val headers = buildMap {
+            if (cfg.doNotTrackEnabled) put("DNT", "1")
+            if (cfg.globalPrivacyControlEnabled) put("Sec-GPC", "1")
+        }
+        if (headers.isEmpty()) {
+            webView.loadUrl(url)
+        } else {
+            webView.loadUrl(url, headers)
+        }
     }
 
     override fun showStartPage() {
@@ -445,6 +525,50 @@ private class CompatWebViewTabSession(
             title = current.title,
             textContent = Uri.parse(current.url).host.orEmpty()
         )
+    }
+
+    override suspend fun detectPageMedia(): List<DetectedPageMedia> {
+        val js = """(function(){
+          var out=[]; var seen={};
+          function add(u,t,k,m){ if(!u||seen[u])return; seen[u]=1; out.push({url:u,title:t||u,kind:k||'file',mimeType:m||''}); }
+          document.querySelectorAll('video,audio').forEach(function(el,i){
+            var k=el.tagName.toLowerCase(); var s=el.currentSrc||el.src;
+            if(s) add(s, el.title||k+' '+(i+1), k, k+'/mp4');
+            el.querySelectorAll('source').forEach(function(src){ if(src.src) add(src.src, el.title||k, k, src.type||''); });
+          });
+          document.querySelectorAll('a[href]').forEach(function(a){
+            var h=a.href||'';
+            if(h.indexOf('magnet:')===0) add(h, a.textContent||'Magnet', 'magnet', 'application/x-bittorrent');
+            else if(/\.(mp4|mkv|webm|mp3|m4a|flac|pdf|zip|apk|torrent)(\?|$)/i.test(h)) add(h, a.textContent||'', '', '');
+          });
+          return JSON.stringify(out.slice(0,50));
+        })();"""
+        val raw = withTimeoutOrNull(1_800L) {
+            suspendCancellableCoroutine<String?> { cont ->
+                webView.evaluateJavascript(js) { res ->
+                    if (cont.isActive) cont.resume(res)
+                }
+            }
+        } ?: return emptyList()
+        val unquoted = raw.trim().let {
+            if (it.startsWith("\"") && it.endsWith("\"")) {
+                org.json.JSONTokener(it).nextValue() as? String
+            } else it
+        } ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(unquoted)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val u = o.optString("url")
+                    if (u.isBlank()) continue
+                    val m = o.optString("mimeType").takeIf { it.isNotBlank() }
+                    val k = o.optString("kind").takeIf { it.isNotBlank() }?.let { DownloadKind.fromId(it) }
+                        ?: DownloadKind.infer(u, m, u)
+                    add(DetectedPageMedia(url = u, title = o.optString("title", u), kind = k, mimeType = m))
+                }
+            }
+        }.getOrDefault(emptyList())
     }
 
     override fun release() {
