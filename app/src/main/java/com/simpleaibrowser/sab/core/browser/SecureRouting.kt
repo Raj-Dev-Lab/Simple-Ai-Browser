@@ -99,6 +99,35 @@ object SecureRouting {
 
     fun prefsFile(context: Context): File = File(context.filesDir, PREFS_FILE_NAME)
 
+    /**
+     * Validation guard: the config file SAB generates must contain ONLY the network.proxy.*
+     * user_pref lines written by [geckoPrefsFileContent], with per-key value rules (integers,
+     * quoted strings, or bare booleans). A corrupt, tampered or truncated file must never
+     * reach GeckoRuntime — it is deleted instead so the app still boots.
+     */
+    private val PREF_VALUE_RULES = mapOf(
+        "network.proxy.type" to Regex("-?\\d+"),
+        "network.proxy.socks" to Regex("\"[^\"]*\""),
+        "network.proxy.socks_port" to Regex("\\d+"),
+        "network.proxy.socks_version" to Regex("\\d+"),
+        "network.proxy.socks_remote_dns" to Regex("(true|false)"),
+        "network.proxy.no_proxies_on" to Regex("\"[^\"]*\"")
+    )
+
+    fun validatePrefsFileContent(content: String): Boolean {
+        val lines = content.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("//") }
+            .toList()
+        if (lines.isEmpty()) return false
+        val prefLine = Regex("""user_pref\("(network\.proxy\.[a-z_]+)",\s*(.+)\);""")
+        return lines.all { line ->
+            val match = prefLine.matchEntire(line) ?: return@all false
+            val rule = PREF_VALUE_RULES[match.groupValues[1]] ?: return@all false
+            rule.matches(match.groupValues[2].trim())
+        }
+    }
+
     /** Writes (or clears) the Gecko config file according to the routing config. */
     fun applyPrefsFile(context: Context, config: RoutingConfig): Boolean {
         return runCatching {

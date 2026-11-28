@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,6 +92,7 @@ import com.simpleaibrowser.sab.ui.viewmodel.BrowserViewModel
 import com.simpleaibrowser.sab.ui.viewmodel.ExtensionsTab
 import com.simpleaibrowser.sab.ui.viewmodel.LibraryTab
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun SabBrowserApp(
@@ -117,6 +119,8 @@ fun SabBrowserApp(
     val routingRestartNeeded by viewModel.routingPendingRestart.collectAsStateWithLifecycle()
     val relayPhase by viewModel.relayState.collectAsStateWithLifecycle()
     val orbotInstalled = remember { viewModel.isOrbotAvailable() }
+    val diagnosticsSnapshot by viewModel.diagnostics.collectAsStateWithLifecycle()
+    val shareScope = rememberCoroutineScope()
 
     val secureRoutingState = SecureRoutingUiState(
         shieldEnabled = settings.incognitoAutoShieldEnabled,
@@ -687,6 +691,28 @@ fun SabBrowserApp(
                         onDismissRelayResults = { viewModel.dismissRelayResults() },
                         onStopRouting = { viewModel.setRoutingConfig(SecureRouting.RoutingMode.OFF, "", 0) },
                         onRestartForRouting = { viewModel.restartToApplyRouting() },
+                        diagnostics = diagnosticsSnapshot,
+                        onLoadDiagnostics = { viewModel.loadDiagnostics() },
+                        onShareCrashReport = {
+                            shareScope.launch {
+                                val report = viewModel.crashReportText()
+                                if (report != null) {
+                                    val send = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, "SAB crash report")
+                                        putExtra(Intent.EXTRA_TEXT, report)
+                                    }
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent.createChooser(send, "Share SAB crash report")
+                                        )
+                                    }
+                                } else {
+                                    viewModel.showToast("No crash report available")
+                                }
+                            }
+                        },
+                        onClearDiagnostics = { viewModel.clearDiagnostics() },
                         onClearAllData = { viewModel.clearAllBrowsingData() },
                         onDismiss = { viewModel.closeOverlay() }
                     )

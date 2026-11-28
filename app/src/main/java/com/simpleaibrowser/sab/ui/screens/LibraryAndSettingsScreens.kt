@@ -54,6 +54,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +74,7 @@ import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
 import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.CrashGuard
 import com.simpleaibrowser.sab.core.browser.IncognitoShield
 import com.simpleaibrowser.sab.core.browser.SecureRouting
 import com.simpleaibrowser.sab.core.browser.SearchEngine
@@ -416,6 +418,10 @@ fun SettingsScreen(
     onDismissRelayResults: () -> Unit = {},
     onStopRouting: () -> Unit = {},
     onRestartForRouting: () -> Unit = {},
+    diagnostics: CrashGuard.DiagnosticsSnapshot? = null,
+    onLoadDiagnostics: () -> Unit = {},
+    onShareCrashReport: () -> Unit = {},
+    onClearDiagnostics: () -> Unit = {},
     onClearAllData: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1179,6 +1185,80 @@ fun SettingsScreen(
                                         Icon(Icons.Filled.RestartAlt, contentDescription = null)
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("Restart now")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Diagnostics (crash & boot guard)
+                item(key = "diagnostics_section") {
+                    LaunchedEffect(Unit) { onLoadDiagnostics() }
+                    SettingsSectionCard(title = "DIAGNOSTICS") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            val snap = diagnostics
+                            if (snap == null) {
+                                Text(
+                                    "Collecting diagnostics…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = sabColors.subtleText
+                                )
+                            } else {
+                                Text(
+                                    "Engine: ${snap.engineSummary}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = sabColors.subtleText
+                                )
+                                Text(
+                                    if (snap.bootFailures == 0) {
+                                        "Failed boot attempts: none"
+                                    } else {
+                                        "Failed boot attempts: ${snap.bootFailures}"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (snap.bootFailures == 0) sabColors.subtleText else MaterialTheme.colorScheme.error
+                                )
+                                if (snap.safeModeNotice) {
+                                    Text(
+                                        "⚠ Safe mode: SAB removed the Secure Routing profile after repeated startup crashes. Re-enable routing below if you need it.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                Text(
+                                    "Secure Routing: ${snap.routingModeLabel} • prefs file " +
+                                        if (snap.routingPrefsFilePresent) "present" else "not present",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = sabColors.subtleText
+                                )
+                                val crash = snap.lastCrash
+                                if (crash == null) {
+                                    Text(
+                                        "No crash has been recorded on this device.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText
+                                    )
+                                } else {
+                                    val whenText = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                                        .format(java.util.Date(crash.timestampMs))
+                                    Text(
+                                        "Last crash: $whenText (${crash.threadName})",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    Text(
+                                        text = crash.stackTrace.lineSequence().take(8).joinToString("\n"),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(onClick = onShareCrashReport) {
+                                            Text("Copy crash report")
+                                        }
+                                        TextButton(onClick = onClearDiagnostics) {
+                                            Text("Clear", color = MaterialTheme.colorScheme.error)
+                                        }
                                     }
                                 }
                             }

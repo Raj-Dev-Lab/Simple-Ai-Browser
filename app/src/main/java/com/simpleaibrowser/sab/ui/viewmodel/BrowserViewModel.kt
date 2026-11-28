@@ -18,7 +18,9 @@ import com.example.MainActivity
 import com.example.R
 import com.simpleaibrowser.sab.speech.SabReadAloud
 import com.simpleaibrowser.sab.core.browser.AddressBarPosition
+import com.simpleaibrowser.sab.core.browser.BootGuard
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
+import com.simpleaibrowser.sab.core.browser.CrashGuard
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
 import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
 import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
@@ -468,7 +470,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _toastMessage.value = null
     }
 
-    private fun showToast(message: String) {
+    fun showToast(message: String) {
         _toastMessage.value = message
     }
 
@@ -1772,6 +1774,44 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun restartToApplyRouting() {
         showToast("Restarting to apply secure routing…")
         SecureRouting.restartApp(appContext)
+    }
+
+    // --- Diagnostics (BootGuard + CrashGuard) ---
+
+    private val _diagnostics = MutableStateFlow<CrashGuard.DiagnosticsSnapshot?>(null)
+    val diagnostics: StateFlow<CrashGuard.DiagnosticsSnapshot?> = _diagnostics.asStateFlow()
+
+    /** Collects engine, boot-guard and crash-guard state for Settings → DIAGNOSTICS. */
+    fun loadDiagnostics() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ctx = appContext
+            val snapshot = CrashGuard.DiagnosticsSnapshot(
+                engineSummary = runCatching {
+                    "${engine.engineInfo.name} ${engine.engineInfo.version}"
+                }.getOrDefault("Engine unavailable"),
+                bootFailures = runCatching { BootGuard.getBootFailures(ctx) }.getOrDefault(0),
+                safeModeNotice = runCatching {
+                    BootGuard.isSafeModeNoticePending(ctx)
+                }.getOrDefault(false),
+                routingPrefsFilePresent = runCatching {
+                    SecureRouting.prefsFile(ctx).exists()
+                }.getOrDefault(false),
+                routingModeLabel = routingConfig.value.mode.label,
+                lastCrash = runCatching { CrashGuard.readLastCrash(ctx) }.getOrNull()
+            )
+            _diagnostics.value = snapshot
+        }
+    }
+
+    fun clearDiagnostics() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { CrashGuard.clear(appContext) }
+            loadDiagnostics()
+        }
+    }
+
+    suspend fun crashReportText(): String? = withContext(Dispatchers.IO) {
+        runCatching { CrashGuard.readLastCrash(appContext)?.formatted() }.getOrNull()
     }
 
     override fun onCleared() {

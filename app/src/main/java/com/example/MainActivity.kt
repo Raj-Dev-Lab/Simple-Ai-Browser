@@ -8,6 +8,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import com.simpleaibrowser.sab.core.browser.BootGuard
 import com.simpleaibrowser.sab.downloads.SabDownloadService
 import com.simpleaibrowser.sab.ui.SabBrowserApp
 import com.simpleaibrowser.sab.ui.viewmodel.BrowserOverlay
@@ -19,6 +20,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // BootGuard: count this boot BEFORE the ViewModel (and thus the engine) is created.
+        // If the process dies before focus is ever gained, the counter persists and the next
+        // launch enters safe mode (removes the Secure Routing prefs file) to break the loop.
+        BootGuard.recordBootStart(this)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
@@ -34,6 +39,14 @@ class MainActivity : ComponentActivity() {
                 viewModel = browserViewModel,
                 initialExternalUrl = incomingUrl
             )
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Reaching window focus means the app is genuinely interactive: boot succeeded.
+        if (hasFocus) {
+            BootGuard.markInteractive(this)
         }
     }
 

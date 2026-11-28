@@ -3,6 +3,18 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.1] - 2026-11-28
+
+### Fixed
+- **Startup crash loop protection (safe mode)**: if SAB fails to reach an interactive state on 2 consecutive boots, the engine now removes the Secure Routing prefs file before GeckoView initialization and boots clean. This breaks the one failure mode where a generated startup input could crash the app on every launch — including native crashes that no try/catch can intercept. The app counts boots before the ViewModel is created and clears the counter the moment window focus is gained (MainActivity), so a real crash loop is distinguished from a normal session.
+- **Malformed routing file guard**: the generated GeckoView prefs file is validated against strict per-key rules (integers, quoted strings, bare booleans) before it is handed to the runtime; a corrupt or tampered file is deleted instead of being loaded. (A first draft of this validator would have rejected its own generated `true` values — caught by the new unit test before release.)
+- **`showToast` visibility**: made public so the crash-report share flow can surface feedback (no behavior change).
+
+### Added
+- **CrashGuard**: a JVM-level UncaughtExceptionHandler (installed by the new `SabApplication`, registered in the manifest) persists the full stack trace of any crash to app storage *before* delegating to the system handler — the standard crash dialog is preserved.
+- **Settings → DIAGNOSTICS**: new section showing engine version, failed boot attempts, safe-mode notices, Secure Routing file state, and the last recorded crash with its first stack lines — plus **Copy crash report** (Android share sheet) and **Clear** buttons. When you report a crash, tap Copy and paste the text into the GitHub issue.
+- 5 new Robolectric tests covering boot counting, safe-mode triggering and cleanup, crash report persistence/parsing/delegation, and prefs-file validation.
+
 ## [1.6.0] - 2026-11-28
 
 ### Added

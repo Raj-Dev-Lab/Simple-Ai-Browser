@@ -11,6 +11,7 @@ import com.simpleaibrowser.sab.core.browser.BrowserTabSession
 import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
 import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.BootGuard
 import com.simpleaibrowser.sab.core.browser.PrivacyConfig
 import com.simpleaibrowser.sab.core.browser.SecureRouting
 import com.simpleaibrowser.sab.core.browser.SessionCallbacks
@@ -308,9 +309,22 @@ class GeckoEngineAdapter(
         // SOCKS5, or an explicitly experimental public relay candidate). GeckoRuntime reads it
         // at creation, so routing changes take effect at next launch; tabs are restored by
         // session hydration.
+        //
+        // Startup safety net: a boot-crash loop (>= 2 boots that never became interactive)
+        // or a malformed prefs file would make Gecko fail on every launch. BootGuard removes
+        // the file in safe mode; validation guards against corrupt content so the app always
+        // boots, even if routing can't.
+        val safeMode = BootGuard.enterSafeModeIfCrashLooping(context)
         val routingPrefsFile = SecureRouting.prefsFile(context)
-        if (routingPrefsFile.exists() && routingPrefsFile.length() > 0) {
-            Log.i(TAG, "Secure Routing prefs detected: ${routingPrefsFile.name}")
+        val prefsUsable = routingPrefsFile.exists() &&
+            routingPrefsFile.length() > 0 &&
+            SecureRouting.validatePrefsFileContent(routingPrefsFile.readText())
+        if (!prefsUsable && routingPrefsFile.exists()) {
+            Log.w(TAG, "Secure Routing prefs file is malformed — deleting before runtime creation")
+            routingPrefsFile.delete()
+        }
+        if (prefsUsable) {
+            Log.i(TAG, "Secure Routing prefs detected: ${routingPrefsFile.name} (safeMode=$safeMode)")
             settingsBuilder.configFilePath(routingPrefsFile.absolutePath)
         }
 
