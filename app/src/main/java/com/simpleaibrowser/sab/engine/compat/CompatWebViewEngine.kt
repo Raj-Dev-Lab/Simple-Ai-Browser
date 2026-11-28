@@ -3,13 +3,16 @@ package com.simpleaibrowser.sab.engine.compat
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.Uri
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -33,14 +36,17 @@ import com.simpleaibrowser.sab.core.browser.PrivacyConfig
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SecurityState
 import com.simpleaibrowser.sab.core.browser.SessionCallbacks
+import com.simpleaibrowser.sab.core.browser.SitePermissionStore
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import java.io.ByteArrayInputStream
@@ -358,6 +364,84 @@ private class CompatWebViewTabSession(
                 )
                 return true
             }
+
+            override fun onPermissionRequest(request: PermissionRequest?) {
+                if (request == null) return
+                val host = UrlResolver.extractHost(_state.value.url)
+                val wanted = request.resources ?: emptyArray()
+                val cameraWanted = wanted.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+                val micWanted = wanted.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                if (!cameraWanted && !micWanted) {
+                    request.deny()
+                    return
+                }
+                val cameraDecision = if (cameraWanted) SitePermissionStore.decisionFor(host, "camera") else null
+                val micDecision = if (micWanted) SitePermissionStore.decisionFor(host, "microphone") else null
+                if (cameraDecision == false || micDecision == false) {
+                    request.deny()
+                    return
+                }
+                val rememberedAllow = cameraDecision == true || micDecision == true
+                if (rememberedAllow) {
+                    request.grant(request.resources)
+                    return
+                }
+                val label = when {
+                    cameraWanted && micWanted -> "use your camera and microphone"
+                    cameraWanted -> "use your camera"
+                    else -> "use your microphone"
+                }
+                val done = AtomicBoolean(false)
+                callbacks.onPromptRequested(
+                    WebPromptRequest.SitePermission(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        tabId = this@CompatWebViewTabSession.id,
+                        permissionLabel = label,
+                        onResult = { granted ->
+                            if (done.compareAndSet(false, true)) {
+                                if (cameraWanted) SitePermissionStore.record(host, "camera", granted)
+                                if (micWanted) SitePermissionStore.record(host, "microphone", granted)
+                                if (granted) request.grant(request.resources) else request.deny()
+                            }
+                        }
+                    )
+                )
+            }
+
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String?,
+                callback: GeolocationPermissions.Callback?
+            ) {
+                if (callback == null) return
+                val host = UrlResolver.extractHost(origin ?: _state.value.url)
+                when (SitePermissionStore.decisionFor(host, "geolocation")) {
+                    true -> {
+                        callback.invoke(origin ?: host, true, false)
+                        return
+                    }
+                    false -> {
+                        callback.invoke(origin ?: host, false, false)
+                        return
+                    }
+                    null -> Unit
+                }
+                val done = AtomicBoolean(false)
+                callbacks.onPromptRequested(
+                    WebPromptRequest.SitePermission(
+                        id = UUID.randomUUID().toString(),
+                        originHost = host,
+                        tabId = this@CompatWebViewTabSession.id,
+                        permissionLabel = "access your location",
+                        onResult = { granted ->
+                            if (done.compareAndSet(false, true)) {
+                                SitePermissionStore.record(host, "geolocation", granted)
+                                callback.invoke(origin ?: host, granted, false)
+                            }
+                        }
+                    )
+                )
+            }
         }
     }
 
@@ -569,6 +653,18 @@ private class CompatWebViewTabSession(
                 }
             }
         }.getOrDefault(emptyList())
+    }
+
+    /** Page screenshot by drawing the WebView contents into a bitmap (main thread). */
+    override suspend fun capturePageBitmap(): Bitmap? = withContext(Dispatchers.Main.immediate) {
+        val w = webView.width.coerceAtLeast(1)
+        val h = webView.height.coerceAtLeast(1)
+        if (w > 8192 || h > 8192) return@withContext null
+        runCatching {
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            webView.draw(Canvas(bitmap))
+            bitmap
+        }.getOrNull()
     }
 
     override fun release() {

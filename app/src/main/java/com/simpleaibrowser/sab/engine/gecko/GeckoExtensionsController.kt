@@ -13,6 +13,7 @@ import com.simpleaibrowser.sab.core.browser.ExtensionPopupSession
 import com.simpleaibrowser.sab.core.browser.ExtensionSource
 import com.simpleaibrowser.sab.core.browser.InstalledExtensionInfo
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -50,7 +51,11 @@ class GeckoExtensionsController(
 ) : BrowserExtensionsController {
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, err ->
+            Log.e(EXT_TAG, "Unhandled extensions coroutine failure", err)
+        }
+    )
 
     private val rawExtensions = ConcurrentHashMap<String, WebExtension>()
     private val defaultActions = ConcurrentHashMap<String, WebExtension.Action>()

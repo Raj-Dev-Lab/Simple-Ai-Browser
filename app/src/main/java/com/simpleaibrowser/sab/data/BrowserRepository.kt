@@ -22,7 +22,29 @@ class BrowserRepository(
     val history: Flow<List<HistoryEntity>> = database.historyDao().observeRecent()
     val downloads: Flow<List<DownloadEntity>> = database.downloadDao().observeAll()
     val extensionRecords: Flow<List<ExtensionRecordEntity>> = database.extensionRecordDao().observeAll()
+    val sitePermissions: Flow<List<SitePermissionEntity>> = database.sitePermissionDao().observeAll()
     val settings: Flow<BrowserSettings> = preferences.settingsFlow
+
+    suspend fun getAllSitePermissions(): List<SitePermissionEntity> =
+        database.sitePermissionDao().getAll()
+
+    suspend fun upsertSitePermission(origin: String, permission: String, allow: Boolean) {
+        database.sitePermissionDao().upsert(
+            SitePermissionEntity(origin = origin, permission = permission, allow = allow)
+        )
+    }
+
+    suspend fun deleteSitePermission(origin: String, permission: String) {
+        database.sitePermissionDao().delete(origin, permission)
+    }
+
+    suspend fun deleteAllSitePermissionsForOrigin(origin: String) {
+        database.sitePermissionDao().deleteAllForOrigin(origin)
+    }
+
+    suspend fun clearAllSitePermissions() {
+        database.sitePermissionDao().clearAll()
+    }
 
     suspend fun seedDefaultSpeedDialsIfEmpty() {
         if (database.speedDialDao().count() == 0) {
@@ -38,6 +60,17 @@ class BrowserRepository(
             )
             database.speedDialDao().insertAll(defaults)
         }
+    }
+
+    suspend fun addBookmark(title: String, url: String, folder: String = "General") {
+        val normalizedUrl = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
+        database.bookmarkDao().insert(
+            BookmarkEntity(
+                title = title.trim().ifBlank { normalizedUrl },
+                url = normalizedUrl,
+                folder = folder
+            )
+        )
     }
 
     suspend fun addSpeedDial(title: String, url: String) {

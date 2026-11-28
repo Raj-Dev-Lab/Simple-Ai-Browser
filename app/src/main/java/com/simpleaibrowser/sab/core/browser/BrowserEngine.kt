@@ -1,6 +1,7 @@
 package com.simpleaibrowser.sab.core.browser
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.view.View
 import kotlinx.coroutines.flow.StateFlow
@@ -492,6 +493,12 @@ interface BrowserTabSession {
     fun detachFromView(view: View)
     suspend fun extractPageSnapshot(maxChars: Int = 12_000): PageContextSnapshot
     suspend fun detectPageMedia(): List<DetectedPageMedia> = emptyList()
+
+    /**
+     * Captures the currently rendered page as a bitmap (page screenshot feature).
+     * Returns null when no view is attached or capture is unsupported.
+     */
+    suspend fun capturePageBitmap(): Bitmap? = null
     fun release()
 }
 

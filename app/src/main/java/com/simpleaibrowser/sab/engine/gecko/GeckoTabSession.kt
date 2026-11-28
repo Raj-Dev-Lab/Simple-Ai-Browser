@@ -2,10 +2,14 @@ package com.simpleaibrowser.sab.engine.gecko
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
+import android.app.Activity
 import android.util.Log
+import android.view.PixelCopy
 import android.view.View
+import android.view.Window
 import androidx.core.content.ContextCompat
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
 import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
@@ -19,11 +23,13 @@ import com.simpleaibrowser.sab.core.browser.PromptChoiceOption
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SecurityState
 import com.simpleaibrowser.sab.core.browser.SessionCallbacks
+import com.simpleaibrowser.sab.core.browser.SitePermissionStore
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.downloads.DownloadFileSystem
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +40,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.mozilla.geckoview.AllowOrDeny
@@ -52,6 +59,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
+import android.content.ContextWrapper
 
 private const val SESSION_TAG = "SabGeckoSession"
 
@@ -64,7 +72,11 @@ class GeckoTabSession(
     private val callbacks: SessionCallbacks
 ) : BrowserTabSession {
 
-    private val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val sessionScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, err ->
+            Log.e(SESSION_TAG, "Unhandled session coroutine failure", err)
+        }
+    )
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val _state = MutableStateFlow(
@@ -85,6 +97,9 @@ class GeckoTabSession(
             .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
             .build()
     )
+
+    @Volatile
+    private var attachedGeckoView: GeckoView? = null
 
     @Volatile
     private var nativePort: WebExtension.Port? = null
@@ -770,9 +785,20 @@ class GeckoTabSession(
                 if (perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE) {
                     return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
                 }
+                val host = UrlResolver.extractHost(perm.uri)
+                val permissionKey = permissionKeyFor(perm.permission)
+                // Remembered decision ("don't ask again"): answer without prompting.
+                when (SitePermissionStore.decisionFor(host, permissionKey)) {
+                    true -> return GeckoResult.fromValue(
+                        GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                    )
+                    false -> return GeckoResult.fromValue(
+                        GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                    )
+                    null -> Unit
+                }
                 val result = GeckoResult<Int>()
                 val completed = AtomicBoolean(false)
-                val host = UrlResolver.extractHost(perm.uri)
                 val label = when (perm.permission) {
                     GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> "access your location"
                     GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> "show notifications"
@@ -790,6 +816,7 @@ class GeckoTabSession(
                         permissionLabel = label,
                         onResult = { granted ->
                             if (completed.compareAndSet(false, true)) {
+                                SitePermissionStore.record(host, permissionKey, granted)
                                 result.complete(
                                     if (granted) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
                                     else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
@@ -814,13 +841,25 @@ class GeckoTabSession(
                     callback.reject()
                     return
                 }
+                val host = UrlResolver.extractHost(uri)
+                // Remembered per-device decisions: camera / microphone for this site.
+                val cameraDecision = if (hasVideo) SitePermissionStore.decisionFor(host, "camera") else null
+                val micDecision = if (hasAudio) SitePermissionStore.decisionFor(host, "microphone") else null
+                if (cameraDecision == false || micDecision == false) {
+                    callback.reject()
+                    return
+                }
+                val rememberedAllow = (cameraDecision == true || micDecision == true)
+                if (rememberedAllow) {
+                    callback.grant(video?.firstOrNull(), audio?.firstOrNull())
+                    return
+                }
                 val mediaLabel = when {
                     hasVideo && hasAudio -> "use your camera and microphone"
                     hasVideo -> "use your camera"
                     else -> "use your microphone"
                 }
                 val completed = AtomicBoolean(false)
-                val host = UrlResolver.extractHost(uri)
                 callbacks.onPromptRequested(
                     WebPromptRequest.SitePermission(
                         id = UUID.randomUUID().toString(),
@@ -829,6 +868,8 @@ class GeckoTabSession(
                         permissionLabel = mediaLabel,
                         onResult = { granted ->
                             if (completed.compareAndSet(false, true)) {
+                                if (hasVideo) SitePermissionStore.record(host, "camera", granted)
+                                if (hasAudio) SitePermissionStore.record(host, "microphone", granted)
                                 if (granted) {
                                     callback.grant(video?.firstOrNull(), audio?.firstOrNull())
                                 } else {
@@ -840,6 +881,17 @@ class GeckoTabSession(
                 )
             }
         }
+
+    /** Maps a GeckoView content permission to the SitePermissionStore key that remembers it. */
+    private fun permissionKeyFor(geckoPermission: Int): String = when (geckoPermission) {
+        GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> "geolocation"
+        GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> "notifications"
+        GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE -> "persistent-storage"
+        GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> "autoplay-audible"
+        GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> "drm"
+        GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS -> "storage-access"
+        else -> "cap_$geckoPermission"
+    }
 
     private fun flattenChoices(
         choices: Array<out GeckoSession.PromptDelegate.ChoicePrompt.Choice>?,
@@ -1114,6 +1166,7 @@ class GeckoTabSession(
 
     override fun attachToView(view: View) {
         val geckoView = view as? GeckoView ?: return
+        attachedGeckoView = geckoView
         if (geckoView.session !== geckoSession) {
             geckoView.releaseSession()
             geckoView.setSession(geckoSession)
@@ -1122,9 +1175,46 @@ class GeckoTabSession(
 
     override fun detachFromView(view: View) {
         val geckoView = view as? GeckoView ?: return
+        if (attachedGeckoView === geckoView) {
+            attachedGeckoView = null
+        }
         if (geckoView.session === geckoSession) {
             geckoView.releaseSession()
         }
+    }
+
+    /** Page screenshot via PixelCopy on the host window — captures what the user sees. */
+    override suspend fun capturePageBitmap(): Bitmap? = withContext(Dispatchers.Main) {
+        val view = attachedGeckoView ?: return@withContext null
+        val window = findHostWindow(view) ?: return@withContext null
+        val width = window.decorView.width.coerceAtLeast(1)
+        val height = window.decorView.height.coerceAtLeast(1)
+        if (width > 8192 || height > 8192) return@withContext null
+        suspendCancellableCoroutine { cont ->
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            try {
+                PixelCopy.request(
+                    window,
+                    bitmap,
+                    { result: Int ->
+                        cont.resume(if (result == PixelCopy.SUCCESS) bitmap else null)
+                    },
+                    mainHandler
+                )
+            } catch (t: Throwable) {
+                Log.e(SESSION_TAG, "Page capture failed", t)
+                cont.resume(null)
+            }
+        }
+    }
+
+    private fun findHostWindow(view: View): Window? {
+        var ctx: Context = view.context
+        while (ctx is ContextWrapper) {
+            if (ctx is Activity) return ctx.window
+            ctx = ctx.baseContext
+        }
+        return null
     }
 
     override suspend fun extractPageSnapshot(maxChars: Int): PageContextSnapshot {

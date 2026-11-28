@@ -3,6 +3,25 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.0] - 2026-11-28
+
+### Added
+- **Listen to This Page (Read Aloud)**: New Opera-menu action reads any article out loud with Android's offline TextToSpeech engine, with a floating mini player (pause/resume, ± speed 0.5–2.5x, stop, live sentence counter). Text comes from the existing sab-bridge page extraction; the engine is released when finished to save battery.
+- **Take Page Screenshot**: New menu action captures the rendered page (`PixelCopy` on the engine view / canvas draw on the fallback WebView) and saves a PNG to the SAB vault under `Files → Screenshots` with a toast confirmation.
+- **Share Page as QR Code**: Generates a scannable QR of the current URL entirely offline (zxing core) and opens the Android share sheet with the image plus the link text.
+- **Add to Home Screen**: Pins a launcher shortcut for the current site (title + URL) that opens it directly in SAB, using the system pin-shortcut dialog.
+- **Site Permissions Manager & "Don't ask again"**: Site permission prompts (location, notifications, persistent storage, DRM, storage access, autoplay, camera, microphone) can now be remembered per site. Every grant/deny is stored in a new Room table (`site_permissions`, DB v5 with migration) and automatically re-applied on reloads, navigations, and app restarts — no more repeated prompts for the same site. Settings gained a **Site Permissions** section listing every remembered decision with per-entry "Forget" and a "Reset all" action. The fallback WebView engine also gained real site-permission handling (camera, microphone, geolocation) with the same memory.
+- **Data Backup (Export/Import)**: Settings → Data Backup exports all bookmarks and speed dials as a JSON file to any location via the system file picker, and restores them from a backup file.
+
+### Fixed
+- **App crash when downloading torrents (and other downloads)**: every background task in the download manager (26 coroutine entry points — add/resume/pause/cancel/delete/export/verify/scan) ran in bare `scope.launch` blocks, so any DB, IO, or export failure hit the default uncaught-exception handler and killed the whole process. All tasks now run on a supervised managed scope: failures are logged, surfaced as a toast, and the affected task stays resumable instead of crashing the app. Torrent completion export failures no longer kill the app either.
+- **Torrent engine resilience**: the libtorrent alert dispatcher is now exception-guarded (an alert-processing error previously killed the alert loop, leaving torrents permanently "stuck"); invalid magnet links are validated *before* being added to the native session (previously they were added and then marked failed, leaving an invisible orphan download).
+- **Session/extension coroutine safety**: Gecko session and extension-controller coroutine scopes got exception handlers so an unexpected error can no longer crash the process; the settings collector is failure-isolated.
+- **Splash replaced with a natural loading screen**: the choreographed orbit-ring splash (which lagged) is now a simple, fast loading screen — breathing emblem + wordmark + indeterminate progress bar — that hides itself after ~0.9 s or on tap; it recomposes nothing per frame and allocates no shaders.
+
+### Notes
+- The planned cookie-banner-blocking feature was **not** added: GeckoView 161's public API has no cookie-banner control (verified against the artifact's classes), and faking one with injected scripts would be unreliable. The existing ETP/dFPI/tracking protection suite already blocks most consent walls indirectly.
+
 ## [1.4.1] - 2026-11-26
 
 ### Fixed

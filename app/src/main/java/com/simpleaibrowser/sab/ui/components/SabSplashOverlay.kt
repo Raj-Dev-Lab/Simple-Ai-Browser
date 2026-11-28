@@ -1,45 +1,38 @@
 package com.simpleaibrowser.sab.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -52,32 +45,20 @@ import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.ui.theme.JetBrainsMonoFamily
 import com.simpleaibrowser.sab.ui.theme.SpaceGroteskFamily
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 private val SplashBackdrop = Color(0xFF080C15)
-private val AuraColors = listOf(Color(0x38FF2E54), Color(0x1838BDF8), Color.Transparent)
-private val RingColors = listOf(
-    Color(0x00FF2E54),
-    Color(0xFFFF2E54),
-    Color(0xFFFF7A90),
-    Color(0xFF38BDF8),
-    Color(0xFFFF2E54)
-)
-private val AuraPivotYFraction = 0.44f
-private val AuraMaxScale = 1.15f
+private val SplashAccent = Color(0xFFFF2E54)
+private val SplashTrack = Color(0xFF1B2233)
 
 /**
- * Signature SAB launch animation.
+ * SAB launch loading screen.
  *
- * Performance notes (this overlay used to jank on start):
- *  - Every animated property is read inside [graphicsLayer] lambdas or inside draw lambdas only.
- *    Animation frames therefore update GPU layer properties / re-record a tiny draw scope instead of
- *    recomposing and re-laying-out the whole overlay 60 times per second.
- *  - The full-screen aura gradient is rasterized once per size at its maximum radius and then scaled
- *    with a GPU transform, so no `Brush`/`Shader` object is allocated per frame (the old code built
- *    a new radial-gradient shader every frame, which never hit Compose's per-size shader cache).
- *  - The sweep-gradient brush of the orbit ring is remembered once.
- *  - Text content that depends on [engineInfo] is computed once per [engineInfo] value, not per frame.
+ * Deliberately simple and natural (replaced the old choreographed orbit-ring animation, which
+ * users experienced as laggy): a static emblem with a soft breathing pulse, the wordmark, and
+ * an indeterminate Material progress bar. Everything is GPU-composited (one alpha layer + the
+ * built-in indicator), so there is no custom Canvas work, no shader allocation and no
+ * recomposition while it is visible. It hides itself automatically after a short, fixed
+ * warm-up window, or immediately on tap.
  */
 @Composable
 fun SabSplashOverlay(
@@ -85,57 +66,22 @@ fun SabSplashOverlay(
     engineInfo: EngineInfo,
     onFinished: () -> Unit
 ) {
-    val ringSweep = remember { Animatable(0f) }
-    val logoScale = remember { Animatable(0.74f) }
-    val logoRotation = remember { Animatable(-18f) }
-    val logoAlpha = remember { Animatable(0f) }
-    val wordmarkAlpha = remember { Animatable(0f) }
-    val wordmarkOffsetY = remember { Animatable(18f) }
-    val auraScale = remember { Animatable(0.6f) }
-
     LaunchedEffect(visible) {
         if (!visible) return@LaunchedEffect
-        ringSweep.snapTo(0f)
-        logoScale.snapTo(0.74f)
-        logoRotation.snapTo(-18f)
-        logoAlpha.snapTo(0f)
-        wordmarkAlpha.snapTo(0f)
-        wordmarkOffsetY.snapTo(18f)
-        auraScale.snapTo(0.6f)
-
-        val easeOutExpo = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
-
-        launch {
-            auraScale.animateTo(AuraMaxScale, tween(900, easing = FastOutSlowInEasing))
-        }
-        launch {
-            ringSweep.animateTo(360f, tween(760, easing = easeOutExpo))
-        }
-        launch {
-            delay(90)
-            launch { logoAlpha.animateTo(1f, tween(360)) }
-            launch {
-                logoScale.animateTo(
-                    1f,
-                    spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
-                )
-            }
-            launch {
-                logoRotation.animateTo(0f, tween(580, easing = easeOutExpo))
-            }
-        }
-        launch {
-            delay(340)
-            launch { wordmarkAlpha.animateTo(1f, tween(420)) }
-            launch { wordmarkOffsetY.animateTo(0f, tween(460, easing = easeOutExpo)) }
-        }
-
-        delay(1450)
+        delay(900)
         onFinished()
     }
+
+    val breathing = rememberInfiniteTransition(label = "sabSplashBreath")
+    val emblemAlpha by breathing.animateFloat(
+        initialValue = 0.82f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(820),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "sabSplashBreathAlpha"
+    )
 
     val engineStatusLabel = remember(engineInfo.isGeckoViewActive, engineInfo.abi) {
         if (engineInfo.isGeckoViewActive) {
@@ -144,12 +90,10 @@ fun SabSplashOverlay(
             "GECKOVIEW 161 ARCH • READY"
         }
     }
-    val engineStatusDotColor = if (engineInfo.isGeckoViewActive) Color(0xFF10B981) else Color(0xFF38BDF8)
-    val orbitBrush = remember { Brush.sweepGradient(colors = RingColors) }
 
     AnimatedVisibility(
         visible = visible,
-        exit = fadeOut(tween(340)) + scaleOut(targetScale = 1.06f, animationSpec = tween(340))
+        exit = fadeOut(animationSpec = tween(240))
     ) {
         Box(
             modifier = Modifier
@@ -163,133 +107,62 @@ fun SabSplashOverlay(
                 .testTag("sab_splash_overlay"),
             contentAlignment = Alignment.Center
         ) {
-            // Atmospheric crimson + cobalt radial glow. Drawn once at max radius per size; the
-            // animation only scales the GPU layer, so there is no per-frame shader allocation.
-            Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        val s = auraScale.value
-                        scaleX = s
-                        scaleY = s
-                        transformOrigin = TransformOrigin(0.5f, AuraPivotYFraction)
-                    }
-            ) {
-                val center = Offset(size.width / 2f, size.height * AuraPivotYFraction)
-                val radius = size.minDimension * 0.62f * AuraMaxScale
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = AuraColors,
-                        center = center,
-                        radius = radius
-                    ),
-                    radius = radius,
-                    center = center
-                )
-            }
-
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
                 modifier = Modifier.padding(horizontal = 32.dp)
             ) {
-                Box(
-                    modifier = Modifier.size(164.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // Animated orbital precision sweep ring (draw-phase-only invalidation)
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val strokePx = 4.dp.toPx()
-                        val inset = strokePx * 1.5f
-                        val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
-                        drawArc(
-                            brush = orbitBrush,
-                            startAngle = -90f,
-                            sweepAngle = ringSweep.value,
-                            useCenter = false,
-                            topLeft = Offset(inset, inset),
-                            size = arcSize,
-                            style = Stroke(width = strokePx, cap = StrokeCap.Round)
-                        )
-                    }
+                Image(
+                    painter = painterResource(id = R.drawable.img_sab_logo),
+                    contentDescription = "Simple AI Browser emblem",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(92.dp)
+                        .graphicsLayer { alpha = emblemAlpha }
+                        .clip(CircleShape)
+                )
 
-                    // SAB Prism Emblem (all animated props applied on the GPU layer)
-                    Box(
-                        modifier = Modifier
-                            .size(124.dp)
-                            .graphicsLayer {
-                                scaleX = logoScale.value
-                                scaleY = logoScale.value
-                                rotationZ = logoRotation.value
-                                alpha = logoAlpha.value
-                            }
-                            .clip(CircleShape)
-                            .border(
-                                width = 1.5.dp,
-                                color = Color(0x33FFFFFF),
-                                shape = CircleShape
-                            )
-                    ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.img_sab_logo),
-                            contentDescription = "Simple AI Browser emblem",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
+                Spacer(modifier = Modifier.height(20.dp))
 
-                Spacer(modifier = Modifier.height(28.dp))
+                Text(
+                    text = "SAB",
+                    fontFamily = SpaceGroteskFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 26.sp,
+                    letterSpacing = 6.sp,
+                    color = Color(0xFFF6F8FD)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "SIMPLE AI BROWSER",
+                    fontFamily = SpaceGroteskFamily,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 11.sp,
+                    letterSpacing = 4.sp,
+                    color = Color(0xFF94A3B8)
+                )
 
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.graphicsLayer {
-                        alpha = wordmarkAlpha.value
-                        translationY = wordmarkOffsetY.value.dp.toPx()
-                    }
-                ) {
-                    Text(
-                        text = "SAB",
-                        fontFamily = SpaceGroteskFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 36.sp,
-                        letterSpacing = 6.sp,
-                        color = Color(0xFFF6F8FD)
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "SIMPLE AI BROWSER",
-                        fontFamily = SpaceGroteskFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 12.sp,
-                        letterSpacing = 4.sp,
-                        color = Color(0xFF94A3B8)
-                    )
-                    Spacer(modifier = Modifier.height(22.dp))
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(Color(0xFF131927))
-                            .border(1.dp, Color(0xFF273147), RoundedCornerShape(50))
-                            .padding(horizontal = 14.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(engineStatusDotColor)
-                        )
-                        Text(
-                            text = engineStatusLabel,
-                            fontFamily = JetBrainsMonoFamily,
-                            fontSize = 10.sp,
-                            letterSpacing = 1.sp,
-                            color = Color(0xFFCBD5E1)
-                        )
-                    }
-                }
+                Spacer(modifier = Modifier.height(26.dp))
+
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .width(184.dp)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(50)),
+                    color = SplashAccent,
+                    trackColor = SplashTrack
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = engineStatusLabel,
+                    fontFamily = JetBrainsMonoFamily,
+                    fontSize = 10.sp,
+                    letterSpacing = 1.sp,
+                    color = Color(0xFF64748B),
+                    modifier = Modifier.alpha(0.9f)
+                )
             }
         }
     }

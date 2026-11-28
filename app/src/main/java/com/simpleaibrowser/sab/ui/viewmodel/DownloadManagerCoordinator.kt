@@ -29,9 +29,11 @@ import com.simpleaibrowser.sab.downloads.LibTorrentEngine
 import com.simpleaibrowser.sab.downloads.SabDownloadService
 import com.simpleaibrowser.sab.downloads.SegmentedHttpDownloader
 import com.simpleaibrowser.sab.downloads.TorrentProgressUpdate
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -72,6 +74,19 @@ class DownloadManagerCoordinator(
     private val repository: BrowserRepository,
     private val onToast: (String) -> Unit
 ) {
+    /**
+     * Every background download/torrent/explorer task runs here. A crash inside any task must
+     * never take the app down (this was the "app crashes when downloading a torrent" bug:
+     * an export/DB/IO failure inside a bare scope.launch hit the default uncaught-exception
+     * handler and killed the process). Failures are logged, surfaced as a toast, and the
+     * affected task stays resumable in the manager.
+     */
+    private val managedScope = CoroutineScope(
+        scope.coroutineContext + SupervisorJob() + CoroutineExceptionHandler { _, err ->
+            Log.e(DL_COORD_TAG, "Unhandled download task failure", err)
+            onToast("Download error: ${err.message ?: err.javaClass.simpleName}")
+        }
+    )
     val fileSystem = DownloadFileSystem(context)
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(25, TimeUnit.SECONDS)
@@ -123,7 +138,7 @@ class DownloadManagerCoordinator(
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     init {
-        scope.launch {
+        managedScope.launch {
             var previousMaxConcurrent = _currentSettings.value.maxConcurrentDownloads
             repository.settings.collect { browserSettings ->
                 val dl = browserSettings.downloadSettings
@@ -136,7 +151,7 @@ class DownloadManagerCoordinator(
             }
         }
         registerConnectivityWatcher()
-        scope.launch {
+        managedScope.launch {
             recoverInterruptedTasksOnBoot()
             refreshExplorer()
         }
@@ -171,7 +186,7 @@ class DownloadManagerCoordinator(
         val dlSettings = _currentSettings.value
         if (!dlSettings.autoResumeOnReconnect) return
         val metered = isNetworkMetered()
-        scope.launch {
+        managedScope.launch {
             val all = repository.getAllDownloads()
             all.forEach { entity ->
                 val st = DownloadTaskStatus.fromId(entity.status)
@@ -272,7 +287,7 @@ class DownloadManagerCoordinator(
 
     fun startFromDraft(draft: DownloadAddDraft, legacyLocalUri: String? = null) {
         _pendingDraft.value = null
-        scope.launch {
+        managedScope.launch {
             val s = _currentSettings.value
             val cleanUrl = draft.url.trim()
             val inferredKind = DownloadKind.infer(draft.fileName, draft.mimeType, cleanUrl)
@@ -404,7 +419,7 @@ class DownloadManagerCoordinator(
     }
 
     fun startTorrentFromPickedUri(contentUri: Uri) {
-        scope.launch {
+        managedScope.launch {
             runCatching {
                 val displayName = fileSystem.resolveDisplayName(contentUri, "picked.torrent")
                 val tmp = File(fileSystem.metadataDir(), "picked_${System.currentTimeMillis()}_$displayName")
@@ -674,7 +689,7 @@ class DownloadManagerCoordinator(
         pauseFlags[entity.taskId] = false
         cancelFlags[entity.taskId] = false
 
-        val job = scope.launch {
+        val job = managedScope.launch {
             concurrencySemaphore.withPermit {
                 val fresh = repository.findDownloadByTaskId(entity.taskId) ?: return@withPermit
                 if (pauseFlags[fresh.taskId] == true || cancelFlags[fresh.taskId] == true) return@withPermit
@@ -816,7 +831,7 @@ class DownloadManagerCoordinator(
     }
 
     private fun handleTorrentUpdate(update: TorrentProgressUpdate) {
-        scope.launch {
+        managedScope.launch {
             val entity = repository.findDownloadByInfoHash(update.infoHash) ?: return@launch
             if (entity.status == DownloadTaskStatus.CANCELLED.id) return@launch
             val currentStatus = DownloadTaskStatus.fromId(entity.status)
@@ -856,7 +871,7 @@ class DownloadManagerCoordinator(
 
     private fun handleTorrentFinished(update: TorrentProgressUpdate) {
         if (!torrentFinishedHandled.add(update.infoHash)) return
-        scope.launch {
+        managedScope.launch {
             val entity = repository.findDownloadByInfoHash(update.infoHash) ?: return@launch
             val saveRoot = File(update.savePath.ifBlank { entity.stagingPath })
             val mime = if (saveRoot.isDirectory) "inode/directory" else fileSystem.mimeTypeFor(saveRoot.name)
@@ -895,7 +910,7 @@ class DownloadManagerCoordinator(
 
     fun pauseTask(entity: DownloadEntity) {
         val kind = DownloadKind.fromId(entity.kind)
-        scope.launch {
+        managedScope.launch {
             if (kind.isTorrent) {
                 entity.torrentInfoHash?.let { torrentEngine.pause(it) }
                 repository.updateDownloadStatus(entity.taskId, DownloadTaskStatus.PAUSED.id)
@@ -909,7 +924,7 @@ class DownloadManagerCoordinator(
 
     fun resumeTask(entity: DownloadEntity) {
         val kind = DownloadKind.fromId(entity.kind)
-        scope.launch {
+        managedScope.launch {
             if (entity.wifiOnly && isNetworkMetered()) {
                 repository.updateDownloadStatus(
                     entity.taskId,
@@ -955,7 +970,7 @@ class DownloadManagerCoordinator(
 
     fun cancelTask(entity: DownloadEntity) {
         val kind = DownloadKind.fromId(entity.kind)
-        scope.launch {
+        managedScope.launch {
             if (kind.isTorrent) {
                 entity.torrentInfoHash?.let { torrentEngine.remove(it) }
             } else {
@@ -968,7 +983,7 @@ class DownloadManagerCoordinator(
     }
 
     fun pauseAllActive() {
-        scope.launch {
+        managedScope.launch {
             val all = repository.getAllDownloads()
             all.filter { DownloadTaskStatus.fromId(it.status).canPause }.forEach { pauseTask(it) }
             onToast("Paused active downloads")
@@ -976,7 +991,7 @@ class DownloadManagerCoordinator(
     }
 
     fun resumeAllPaused() {
-        scope.launch {
+        managedScope.launch {
             val all = repository.getAllDownloads()
             all.filter { DownloadTaskStatus.fromId(it.status).canResume }.forEach { resumeTask(it) }
         }
@@ -984,7 +999,7 @@ class DownloadManagerCoordinator(
 
     fun toggleTorrentSequential(entity: DownloadEntity) {
         val next = !entity.sequentialTorrent
-        scope.launch {
+        managedScope.launch {
             repository.setTorrentSequential(entity.taskId, next)
             entity.torrentInfoHash?.let { torrentEngine.setSequential(it, next) }
             onToast(if (next) "Sequential streaming order enabled" else "Standard piece order restored")
@@ -998,14 +1013,14 @@ class DownloadManagerCoordinator(
         val current = list[idx]
         val nextPrio = if (current.isSelected) 0 else 4
         list[idx] = current.copy(priority = nextPrio)
-        scope.launch {
+        managedScope.launch {
             repository.updateTorrentFilesJson(entity.taskId, TorrentFileEntry.toJson(list))
             entity.torrentInfoHash?.let { torrentEngine.applyFilePriorities(it, list) }
         }
     }
 
     fun deleteDownloadRecord(entity: DownloadEntity, deleteFiles: Boolean) {
-        scope.launch {
+        managedScope.launch {
             val kind = DownloadKind.fromId(entity.kind)
             if (kind.isTorrent) {
                 entity.torrentInfoHash?.let { torrentEngine.remove(it) }
@@ -1025,7 +1040,7 @@ class DownloadManagerCoordinator(
     }
 
     fun clearFinished() {
-        scope.launch {
+        managedScope.launch {
             repository.clearFinishedDownloads()
             onToast("Cleared finished download history")
         }
@@ -1037,7 +1052,7 @@ class DownloadManagerCoordinator(
             onToast("No local staged file to hash")
             return
         }
-        scope.launch {
+        managedScope.launch {
             _verifyingSha256TaskId.value = entity.taskId
             val file = File(path)
             val hash = if (file.isFile) fileSystem.computeSha256(file) else null
@@ -1064,7 +1079,7 @@ class DownloadManagerCoordinator(
             onToast("File not found in SAB vault")
             return
         }
-        scope.launch {
+        managedScope.launch {
             val src = File(path)
             val uri = withContext(Dispatchers.IO) {
                 fileSystem.exportToPublicDownloads(src, entity.subfolder, entity.mimeType)
@@ -1189,7 +1204,7 @@ class DownloadManagerCoordinator(
             _detectedPageMedia.value = emptyList()
             return
         }
-        scope.launch {
+        managedScope.launch {
             _isScanningMedia.value = true
             val found = runCatching { session.detectPageMedia() }.getOrDefault(emptyList())
             _detectedPageMedia.value = found
@@ -1216,7 +1231,7 @@ class DownloadManagerCoordinator(
     // --- In-App File Explorer ---
 
     fun refreshExplorer() {
-        scope.launch {
+        managedScope.launch {
             val entries = fileSystem.listDirectory(_currentExplorerPath.value)
             _explorerEntries.value = entries
             _storageSummary.value = fileSystem.storageSummary()
@@ -1237,7 +1252,7 @@ class DownloadManagerCoordinator(
     }
 
     fun createExplorerFolder(name: String) {
-        scope.launch {
+        managedScope.launch {
             fileSystem.createFolder(_currentExplorerPath.value, name)
                 .onSuccess {
                     refreshExplorer()
@@ -1250,7 +1265,7 @@ class DownloadManagerCoordinator(
     }
 
     fun renameExplorerEntry(entry: SabFileEntry, newName: String) {
-        scope.launch {
+        managedScope.launch {
             fileSystem.renameEntry(entry.absolutePath, newName)
                 .onSuccess { renamed ->
                     refreshExplorer()
@@ -1263,7 +1278,7 @@ class DownloadManagerCoordinator(
     }
 
     fun deleteExplorerEntry(entry: SabFileEntry) {
-        scope.launch {
+        managedScope.launch {
             val deleted = fileSystem.deleteEntry(entry.absolutePath)
             if (deleted) {
                 refreshExplorer()
@@ -1273,7 +1288,7 @@ class DownloadManagerCoordinator(
     }
 
     fun exportVaultFileToPublicDownloads(entry: SabFileEntry) {
-        scope.launch {
+        managedScope.launch {
             val uri = withContext(Dispatchers.IO) {
                 fileSystem.exportToPublicDownloads(File(entry.absolutePath), "", entry.mimeType)
             }
@@ -1403,7 +1418,7 @@ class DownloadManagerCoordinator(
             )
         }
         val label = treeUri.lastPathSegment?.substringAfter(':')?.ifBlank { "Custom Folder" } ?: "Custom Folder"
-        scope.launch {
+        managedScope.launch {
             repository.updateDownloadSettings { current ->
                 current.copy(
                     storageLocationMode = com.simpleaibrowser.sab.core.browser.StorageLocationMode.CUSTOM_TREE,

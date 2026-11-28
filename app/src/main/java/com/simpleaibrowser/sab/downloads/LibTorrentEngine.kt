@@ -170,6 +170,11 @@ class LibTorrentEngine(
         saveDir.mkdirs()
 
         val (parsedHash, _) = parseMagnetQuickInfo(magnetUri)
+        if (parsedHash.isNullOrBlank()) {
+            // Validate BEFORE handing the magnet to the session: adding an invalid magnet to
+            // the native session and then throwing would leave it downloading invisibly.
+            throw IllegalArgumentException("Invalid magnet link")
+        }
         val existing = parsedHash?.let { findHandle(it) }
         if (existing != null && existing.isValid) {
             if (sequential) existing.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
@@ -183,7 +188,7 @@ class LibTorrentEngine(
             if (sequential) TorrentFlags.SEQUENTIAL_DOWNLOAD else torrent_flags_t()
         )
         sm.download(magnetUri, saveDir, flags)
-        parsedHash ?: throw IllegalArgumentException("Invalid magnet link")
+        return@runCatching parsedHash
     }
 
     fun startTorrentFile(
@@ -320,6 +325,17 @@ class LibTorrentEngine(
         )
 
         override fun alert(alert: Alert<*>) {
+            // This runs on libtorrent's internal alert thread. Any uncaught exception here
+            // kills the alert dispatch loop (updates stop arriving, "stuck" torrent) and can
+            // propagate into native code. Every alert must be handled defensively.
+            try {
+                handleAlert(alert)
+            } catch (t: Throwable) {
+                Log.e(TORRENT_TAG, "Unhandled error while processing ${alert.type()} alert", t)
+            }
+        }
+
+        private fun handleAlert(alert: Alert<*>) {
             when (alert) {
                 is AddTorrentAlert -> {
                     if (alert.error().isError) {

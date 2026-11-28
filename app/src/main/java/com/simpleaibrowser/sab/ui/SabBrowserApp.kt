@@ -15,13 +15,24 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -48,6 +59,7 @@ import com.simpleaibrowser.sab.core.browser.DownloadTaskStatus
 import com.simpleaibrowser.sab.core.browser.SabViewerRequest
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
+import com.simpleaibrowser.sab.speech.SabReadAloud
 import com.simpleaibrowser.sab.ui.components.EngineViewport
 import com.simpleaibrowser.sab.ui.components.FindInPageBar
 import com.simpleaibrowser.sab.ui.components.OperaBottomBar
@@ -96,6 +108,8 @@ fun SabBrowserApp(
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val rememberedSitePermissions by viewModel.rememberedSitePermissions.collectAsStateWithLifecycle()
+    val readAloud by viewModel.readAloudState.collectAsStateWithLifecycle()
     val isBookmarked by viewModel.isActivePageBookmarked.collectAsStateWithLifecycle()
     val overlay by viewModel.overlay.collectAsStateWithLifecycle()
     val showSplash by viewModel.showSplash.collectAsStateWithLifecycle()
@@ -177,6 +191,14 @@ fun SabBrowserApp(
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { }
+
+    val exportDataLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> uri?.let { viewModel.exportUserData(it) } }
+
+    val importDataLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.importUserData(it) } }
 
     LaunchedEffect(activeDownloadsCount) {
         if (activeDownloadsCount > 0 && !askedNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -464,6 +486,10 @@ fun SabBrowserApp(
                             viewModel.downloadManager.scanCurrentPageMedia(activeSession)
                             showOperaMediaSheet = true
                         },
+                        onReadAloud = { viewModel.startReadAloud() },
+                        onTakeScreenshot = { viewModel.takePageScreenshot() },
+                        onShareQrCode = { viewModel.sharePageAsQrCode() },
+                        onAddToHomeScreen = { viewModel.addCurrentPageToHomeScreen() },
                         onOpenExtensions = { viewModel.openOverlay(BrowserOverlay.Extensions(ExtensionsTab.AMO)) },
                         onTriggerExtensionAction = { extId -> viewModel.extensions.triggerBrowserAction(extId) },
                         onPinToSpeedDial = { viewModel.addCurrentPageToSpeedDial() },
@@ -606,6 +632,13 @@ fun SabBrowserApp(
                         onToggleAutoUpdateExtensions = { viewModel.setAutoUpdateExtensions(it) },
                         onOpenExtensionsStore = { viewModel.openOverlay(BrowserOverlay.Extensions(ExtensionsTab.INSTALLED)) },
                         onOpenDownloadManager = { viewModel.openOverlay(BrowserOverlay.DownloadManager()) },
+                        sitePermissions = rememberedSitePermissions,
+                        onRevokeSitePermission = { origin, permission ->
+                            viewModel.revokeSitePermission(origin, permission)
+                        },
+                        onResetAllSitePermissions = { viewModel.resetAllSitePermissions() },
+                        onExportData = { exportDataLauncher.launch("sab_backup_${System.currentTimeMillis()}.json") },
+                        onImportData = { importDataLauncher.launch(arrayOf("application/json", "text/*")) },
                         onClearAllData = { viewModel.clearAllBrowsingData() },
                         onDismiss = { viewModel.closeOverlay() }
                     )
@@ -768,6 +801,83 @@ fun SabBrowserApp(
                     onDismiss = { viewModel.closeViewer() }
                 )
                 null -> Unit
+            }
+
+            // Read Aloud mini player ("Listen to This Page")
+            if (readAloud.isActive) {
+                Surface(
+                    color = sabColors.chromeSurfaceElevated,
+                    shape = RoundedCornerShape(18),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(
+                            bottom = (if (isBottomAddressBar) 148.dp else 92.dp) +
+                                if (toastMessage != null) 56.dp else 0.dp
+                        )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        IconButton(
+                            onClick = { viewModel.changeReadAloudRate(-0.25f) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Remove,
+                                contentDescription = "Slower speech",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        IconButton(onClick = { viewModel.toggleReadAloudPause() }) {
+                            Icon(
+                                if (readAloud.phase == SabReadAloud.Phase.PLAYING) {
+                                    Icons.Filled.Pause
+                                } else {
+                                    Icons.Filled.PlayArrow
+                                },
+                                contentDescription = if (readAloud.phase == SabReadAloud.Phase.PLAYING) {
+                                    "Pause reading"
+                                } else {
+                                    "Resume reading"
+                                },
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "Listening",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Sentence ${minOf(readAloud.sentenceIndex + 1, readAloud.sentenceCount)}" +
+                                    "/${readAloud.sentenceCount} • ${"%.1f".format(readAloud.speechRate)}x",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = sabColors.subtleText
+                            )
+                        }
+                        IconButton(
+                            onClick = { viewModel.changeReadAloudRate(0.25f) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = "Faster speech",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        IconButton(onClick = { viewModel.stopReadAloud() }) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "Stop reading",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
             }
 
             // Floating Feedback Pill Toast

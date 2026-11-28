@@ -32,7 +32,9 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -65,6 +67,7 @@ import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
 import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.SearchEngine
+import com.simpleaibrowser.sab.core.browser.SitePermissionStore
 import com.simpleaibrowser.sab.core.browser.ThemePreset
 import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import com.simpleaibrowser.sab.core.browser.UrlResolver
@@ -376,6 +379,11 @@ fun SettingsScreen(
     onToggleAutoUpdateExtensions: (Boolean) -> Unit,
     onOpenExtensionsStore: () -> Unit,
     onOpenDownloadManager: () -> Unit = {},
+    sitePermissions: List<SitePermissionStore.SitePermission> = emptyList(),
+    onRevokeSitePermission: (String, String) -> Unit = { _, _ -> },
+    onResetAllSitePermissions: () -> Unit = {},
+    onExportData: () -> Unit = {},
+    onImportData: () -> Unit = {},
     onClearAllData: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -897,6 +905,110 @@ fun SettingsScreen(
                                     )
                                 }
                                 Icon(Icons.Filled.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+
+                // Data Backup
+                item(key = "data_backup_section") {
+                    SettingsSectionCard(title = "DATA BACKUP") {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onExportData)
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Export Bookmarks & Speed Dials", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        "Save a JSON backup file anywhere on your device",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText
+                                    )
+                                }
+                                Icon(Icons.Filled.IosShare, contentDescription = null)
+                            }
+                            HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.5f))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onImportData)
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Import from Backup File", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        "Restore bookmarks and speed dials from a SAB backup",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText
+                                    )
+                                }
+                                Icon(Icons.Filled.SaveAlt, contentDescription = null)
+                            }
+                        }
+                    }
+                }
+
+                // Site Permissions Manager
+                item(key = "site_permissions_section") {
+                    SettingsSectionCard(title = "SITE PERMISSIONS") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "Sites you told SAB to remember are listed here. \"Forget\" asks again next time.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = sabColors.subtleText
+                            )
+                            if (sitePermissions.isEmpty()) {
+                                Text(
+                                    text = "No remembered site permissions yet.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = sabColors.subtleText
+                                )
+                            } else {
+                                sitePermissions.take(30).forEach { grant ->
+                                    val decisionLabel = if (grant.allow) "Allowed" else "Blocked"
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = grant.origin,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "$decisionLabel • ${grant.permission}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (grant.allow) {
+                                                    Color(0xFF10B981)
+                                                } else {
+                                                    MaterialTheme.colorScheme.error
+                                                }
+                                            )
+                                        }
+                                        TextButton(onClick = { onRevokeSitePermission(grant.origin, grant.permission) }) {
+                                            Text("Forget")
+                                        }
+                                    }
+                                    HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.4f))
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(onClick = onResetAllSitePermissions) {
+                                        Text("Reset all", color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
                             }
                         }
                     }

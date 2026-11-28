@@ -317,6 +317,38 @@ interface ExtensionRecordDao {
     suspend fun deleteById(extensionId: String)
 }
 
+@Entity(
+    tableName = "site_permissions",
+    primaryKeys = ["origin", "permission"]
+)
+data class SitePermissionEntity(
+    val origin: String,
+    val permission: String,
+    val allow: Boolean,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Dao
+interface SitePermissionDao {
+    @Query("SELECT * FROM site_permissions ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<SitePermissionEntity>>
+
+    @Query("SELECT * FROM site_permissions ORDER BY updatedAt DESC")
+    suspend fun getAll(): List<SitePermissionEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(item: SitePermissionEntity)
+
+    @Query("DELETE FROM site_permissions WHERE origin = :origin AND permission = :permission")
+    suspend fun delete(origin: String, permission: String)
+
+    @Query("DELETE FROM site_permissions WHERE origin = :origin")
+    suspend fun deleteAllForOrigin(origin: String)
+
+    @Query("DELETE FROM site_permissions")
+    suspend fun clearAll()
+}
+
 @Database(
     entities = [
         SpeedDialEntity::class,
@@ -325,9 +357,10 @@ interface ExtensionRecordDao {
         DownloadEntity::class,
         SavedTabEntity::class,
         SavedIslandEntity::class,
-        ExtensionRecordEntity::class
+        ExtensionRecordEntity::class,
+        SitePermissionEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class SabDatabase : RoomDatabase() {
@@ -337,6 +370,7 @@ abstract class SabDatabase : RoomDatabase() {
     abstract fun downloadDao(): DownloadDao
     abstract fun sessionSnapshotDao(): SessionSnapshotDao
     abstract fun extensionRecordDao(): ExtensionRecordDao
+    abstract fun sitePermissionDao(): SitePermissionDao
 
     companion object {
         @Volatile
@@ -441,6 +475,22 @@ abstract class SabDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `site_permissions` (
+                        `origin` TEXT NOT NULL,
+                        `permission` TEXT NOT NULL,
+                        `allow` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`origin`, `permission`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): SabDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -448,7 +498,7 @@ abstract class SabDatabase : RoomDatabase() {
                     SabDatabase::class.java,
                     "sab_browser.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { instance = it }
             }

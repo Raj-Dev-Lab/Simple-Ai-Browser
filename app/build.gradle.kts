@@ -17,8 +17,8 @@ android {
     applicationId = "com.simpleaibrowser.sab"
     minSdk = 29
     targetSdk = 36
-    versionCode = 8
-    versionName = "1.4.1"
+    versionCode = 9
+    versionName = "1.5.0"
 
     ndk {
       abiFilters += listOf("arm64-v8a", "x86_64")
@@ -184,8 +184,10 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
-  // Mozilla GeckoView 161 (159+, non-omni, arm64-v8a + x86_64, Android 10+)
+  // Mozilla GeckoView 161 (omni, arm64-v8a + x86_64, Android 10+)
   implementation(libs.mozilla.geckoview)
+  // QR code generation for "Share page as QR"
+  implementation(libs.zxing.core)
   // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   // implementation(libs.firebase.firestore)

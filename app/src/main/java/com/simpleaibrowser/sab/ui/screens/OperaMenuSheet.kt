@@ -79,6 +79,10 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.AddToHomeScreen
 import androidx.compose.ui.graphics.asImageBitmap
 import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
 import com.simpleaibrowser.sab.core.browser.EngineInfo
@@ -113,6 +117,10 @@ fun OperaMenuBottomSheet(
     onOpenHistory: () -> Unit,
     onOpenDownloads: () -> Unit,
     onGrabPageMedia: () -> Unit = {},
+    onReadAloud: () -> Unit = {},
+    onTakeScreenshot: () -> Unit = {},
+    onShareQrCode: () -> Unit = {},
+    onAddToHomeScreen: () -> Unit = {},
     onOpenExtensions: () -> Unit,
     onTriggerExtensionAction: (String) -> Unit,
     onPinToSpeedDial: () -> Unit,
@@ -413,6 +421,42 @@ fun OperaMenuBottomSheet(
                             onGrabPageMedia()
                         },
                         testTag = "menu_grab_media_row"
+                    )
+                    MenuActionRow(
+                        icon = Icons.Filled.PlayCircle,
+                        title = "Listen to This Page",
+                        onClick = {
+                            onDismiss()
+                            onReadAloud()
+                        },
+                        testTag = "menu_read_aloud_row"
+                    )
+                    MenuActionRow(
+                        icon = Icons.Filled.PhotoCamera,
+                        title = "Take Page Screenshot",
+                        onClick = {
+                            onDismiss()
+                            onTakeScreenshot()
+                        },
+                        testTag = "menu_screenshot_row"
+                    )
+                    MenuActionRow(
+                        icon = Icons.Filled.QrCode2,
+                        title = "Share Page as QR Code",
+                        onClick = {
+                            onDismiss()
+                            onShareQrCode()
+                        },
+                        testTag = "menu_share_qr_row"
+                    )
+                    MenuActionRow(
+                        icon = Icons.Filled.AddToHomeScreen,
+                        title = "Add to Home Screen",
+                        onClick = {
+                            onDismiss()
+                            onAddToHomeScreen()
+                        },
+                        testTag = "menu_add_home_row"
                     )
                 }
                 val extLabel = when {

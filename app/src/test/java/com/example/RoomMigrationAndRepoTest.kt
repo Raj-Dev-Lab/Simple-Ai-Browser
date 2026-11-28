@@ -88,7 +88,12 @@ class RoomMigrationAndRepoTest {
         helper.close()
 
         val migrated = Room.databaseBuilder(context, SabDatabase::class.java, dbName)
-            .addMigrations(SabDatabase.MIGRATION_1_2, SabDatabase.MIGRATION_2_3, SabDatabase.MIGRATION_3_4)
+            .addMigrations(
+                SabDatabase.MIGRATION_1_2,
+                SabDatabase.MIGRATION_2_3,
+                SabDatabase.MIGRATION_3_4,
+                SabDatabase.MIGRATION_4_5
+            )
             .allowMainThreadQueries()
             .build()
 
@@ -122,6 +127,70 @@ class RoomMigrationAndRepoTest {
                 )
             )
             assertNotNull(migrated.extensionRecordDao().findById("ext@test"))
+        }
+
+        migrated.close()
+        File(dbFile.path).delete()
+    }
+
+    @Test
+    fun `database migrates v4 to v5 creating site permissions table`() {
+        val dbName = "migration_v4_v5_${System.nanoTime()}.db"
+        val dbFile = context.getDatabasePath(dbName)
+        dbFile.parentFile?.mkdirs()
+
+        val callbackV4 = object : SupportSQLiteOpenHelper.Callback(4) {
+            override fun onCreate(db: SupportSQLiteDatabase) {
+                SabDatabase.MIGRATION_1_2.migrate(db)
+                SabDatabase.MIGRATION_2_3.migrate(db)
+                SabDatabase.MIGRATION_3_4.migrate(db)
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `speed_dials` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `accentHex` INTEGER NOT NULL, `position` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `bookmarks` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `folder` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `history` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `visitedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `saved_tabs` (`tabId` TEXT NOT NULL, `title` TEXT NOT NULL, `url` TEXT NOT NULL, `islandId` TEXT, `isActive` INTEGER NOT NULL, `sortOrder` INTEGER NOT NULL, PRIMARY KEY(`tabId`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `saved_islands` (`islandId` TEXT NOT NULL, `name` TEXT NOT NULL, `colorId` TEXT NOT NULL, `isCollapsed` INTEGER NOT NULL, `sortOrder` INTEGER NOT NULL, PRIMARY KEY(`islandId`))"
+                )
+            }
+
+            override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+        }
+
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(callbackV4)
+                .build()
+        )
+        helper.writableDatabase.close()
+        helper.close()
+
+        val migrated = Room.databaseBuilder(context, SabDatabase::class.java, dbName)
+            .addMigrations(SabDatabase.MIGRATION_4_5)
+            .allowMainThreadQueries()
+            .build()
+
+        runBlocking {
+            migrated.sitePermissionDao().upsert(
+                com.simpleaibrowser.sab.data.SitePermissionEntity(
+                    origin = "example.com",
+                    permission = "camera",
+                    allow = true
+                )
+            )
+            val all = migrated.sitePermissionDao().getAll()
+            assertEquals(1, all.size)
+            assertTrue(all.first().allow)
+            migrated.sitePermissionDao().delete("example.com", "camera")
+            assertTrue(migrated.sitePermissionDao().getAll().isEmpty())
         }
 
         migrated.close()
@@ -168,7 +237,7 @@ class RoomMigrationAndRepoTest {
         helper.close()
 
         val migrated = Room.databaseBuilder(context, SabDatabase::class.java, dbName)
-            .addMigrations(SabDatabase.MIGRATION_3_4)
+            .addMigrations(SabDatabase.MIGRATION_3_4, SabDatabase.MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
 

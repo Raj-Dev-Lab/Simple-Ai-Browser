@@ -4,9 +4,19 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.Bitmap
+import android.graphics.drawable.Icon
 import android.net.Uri
+import android.util.Log
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.MainActivity
+import com.example.R
+import com.simpleaibrowser.sab.speech.SabReadAloud
 import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
 import com.simpleaibrowser.sab.core.browser.BrowserTabSession
@@ -24,11 +34,13 @@ import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SabViewerRequest
 import com.simpleaibrowser.sab.core.browser.SearchEngine
 import com.simpleaibrowser.sab.core.browser.SessionCallbacks
+import com.simpleaibrowser.sab.core.browser.SitePermissionStore
 import com.simpleaibrowser.sab.core.browser.StorageLocationMode
 import com.simpleaibrowser.sab.core.browser.TabIsland
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.ThemePreset
 import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
+import com.simpleaibrowser.sab.ui.components.SabQrCode
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.data.BookmarkEntity
@@ -54,9 +66,16 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
@@ -138,6 +157,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = emptyList()
     )
+
+    /** Remembered per-site permission decisions (Settings → Site Permissions manager). */
+    val rememberedSitePermissions: StateFlow<List<SitePermissionStore.SitePermission>> =
+        repository.sitePermissions.map { rows ->
+            rows.map { SitePermissionStore.SitePermission(it.origin, it.permission, it.allow, it.updatedAt) }
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
+
+    fun revokeSitePermission(origin: String, permission: String) {
+        SitePermissionStore.revoke(origin, permission)
+    }
+
+    fun resetAllSitePermissions() {
+        SitePermissionStore.clearAll()
+    }
 
     private val _sessions = MutableStateFlow<List<BrowserTabSession>>(emptyList())
     private val _activeTabId = MutableStateFlow<String>("")
@@ -281,9 +318,40 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             repository.seedDefaultSpeedDialsIfEmpty()
         }
         viewModelScope.launch {
-            settings.collect { pref ->
-                engine.applyPrivacyConfig(pref.toPrivacyConfig())
-                engine.setPreferredDarkScheme(pref.themePreset.isDark)
+            runCatching {
+                settings.collect { pref ->
+                    engine.applyPrivacyConfig(pref.toPrivacyConfig())
+                    engine.setPreferredDarkScheme(pref.themePreset.isDark)
+                }
+            }.onFailure { Log.e("SabViewModel", "Settings collector failed", it) }
+        }
+        // Site permission memory: restore persisted decisions and keep the Room table in sync
+        // whenever the engine layer records a new "don't ask again" choice.
+        viewModelScope.launch {
+            SitePermissionStore.setPersistenceHooks(
+                saver = { item ->
+                    viewModelScope.launch {
+                        runCatching { repository.upsertSitePermission(item.origin, item.permission, item.allow) }
+                    }
+                },
+                revoker = { origin, permission ->
+                    viewModelScope.launch {
+                        runCatching {
+                            when {
+                                origin == "*" -> repository.clearAllSitePermissions()
+                                permission == "*" -> repository.deleteAllSitePermissionsForOrigin(origin)
+                                else -> repository.deleteSitePermission(origin, permission)
+                            }
+                        }
+                    }
+                }
+            )
+            runCatching {
+                SitePermissionStore.replaceAll(
+                    repository.getAllSitePermissions().map {
+                        SitePermissionStore.SitePermission(it.origin, it.permission, it.allow, it.updatedAt)
+                    }
+                )
             }
         }
         viewModelScope.launch {
@@ -1185,8 +1253,258 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // --- Power features: Read Aloud, Screenshot, QR share, Add to Home Screen, Data backup ---
+
+    /** Application context usable inside methods (the constructor param is initializer-only). */
+    private val appContext: Context = getApplication<Application>()
+
+    @Volatile
+    private var readAloudInstance: SabReadAloud? = null
+
+    private fun readAloud(): SabReadAloud =
+        readAloudInstance ?: synchronized(this) {
+            readAloudInstance ?: SabReadAloud(appContext).also { readAloudInstance = it }
+        }
+
+    val readAloudState: StateFlow<SabReadAloud.ReadAloudState> get() = readAloud().state
+
+    fun startReadAloud() {
+        viewModelScope.launch {
+            val session = activeSession.value
+            if (session == null || session.state.value.isStartPage) {
+                showToast("Open a page first to listen to it")
+                return@launch
+            }
+            val snapshot = runCatching { session.extractPageSnapshot() }.getOrNull()
+            if (snapshot == null || snapshot.textContent.isBlank()) {
+                showToast("Could not extract readable text from this page")
+                return@launch
+            }
+            readAloud().start(
+                title = snapshot.title.ifBlank { session.state.value.title },
+                text = snapshot.textContent
+            )
+            val st = readAloudState.value
+            if (st.phase == SabReadAloud.Phase.FAILED) {
+                showToast(st.message ?: "Speech engine unavailable")
+            }
+        }
+    }
+
+    fun toggleReadAloudPause() {
+        when (readAloudState.value.phase) {
+            SabReadAloud.Phase.PLAYING -> readAloud().pause()
+            SabReadAloud.Phase.PAUSED -> readAloud().resume()
+            else -> startReadAloud()
+        }
+    }
+
+    fun stopReadAloud() {
+        readAloud().stop()
+    }
+
+    fun changeReadAloudRate(delta: Float) {
+        readAloud().setSpeechRate(readAloudState.value.speechRate + delta)
+    }
+
+    fun takePageScreenshot() {
+        val session = activeSession.value
+        if (session == null || session.state.value.isStartPage) {
+            showToast("Open a page first")
+            return
+        }
+        viewModelScope.launch {
+            val bitmap = runCatching { session.capturePageBitmap() }.getOrNull()
+            if (bitmap == null) {
+                showToast("Screenshot is not available right now")
+                return@launch
+            }
+            val saved = withContext(Dispatchers.IO) {
+                runCatching {
+                    val target = downloadManager.fileSystem.resolveTargetFile(
+                        fileName = "sab_screenshot_${System.currentTimeMillis()}.png",
+                        subfolder = "Screenshots",
+                        ensureUnique = true
+                    )
+                    FileOutputStream(target).use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 92, out)
+                    }
+                    target
+                }.getOrNull()
+            }
+            if (saved != null) {
+                showToast("Screenshot saved to Files • Screenshots")
+                downloadManager.refreshExplorer()
+            } else {
+                showToast("Could not save screenshot")
+            }
+        }
+    }
+
+    fun sharePageAsQrCode() {
+        val session = activeSession.value ?: return
+        val url = session.state.value.url
+        if (url.isBlank() || !url.startsWith("http", ignoreCase = true)) {
+            showToast("Open a website first")
+            return
+        }
+        val appCtx = appContext
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val bitmap = SabQrCode.encode(url) ?: error("QR generation failed")
+                val shareDir = File(appCtx.cacheDir, "share").apply { mkdirs() }
+                val file = File(shareDir, "sab_qr_${System.currentTimeMillis()}.png")
+                FileOutputStream(file).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                }
+                val shareUri = FileProvider.getUriForFile(
+                    appCtx,
+                    "${appCtx.packageName}.fileprovider",
+                    file
+                )
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "image/png"
+                    putExtra(Intent.EXTRA_STREAM, shareUri)
+                    putExtra(Intent.EXTRA_TEXT, url)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                appCtx.startActivity(
+                    Intent.createChooser(intent, "Share page QR")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.onFailure {
+                showToast("QR share failed: ${it.message ?: it.javaClass.simpleName}")
+            }
+        }
+    }
+
+    fun addCurrentPageToHomeScreen() {
+        val session = activeSession.value ?: return
+        val st = session.state.value
+        if (!st.url.startsWith("http", ignoreCase = true)) {
+            showToast("Open a website first")
+            return
+        }
+        val appCtx = appContext
+        val shortcutManager = appCtx.getSystemService(Context.SHORTCUT_SERVICE) as? ShortcutManager
+        if (shortcutManager == null || !shortcutManager.isRequestPinShortcutSupported) {
+            showToast("Your launcher does not support pinned shortcuts")
+            return
+        }
+        val label = st.title.ifBlank { UrlResolver.extractHost(st.url) }.take(40)
+        val host = UrlResolver.extractHost(st.url).ifBlank { "site" }
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(st.url), appCtx, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        val info = ShortcutInfo.Builder(appCtx, "sab_site_${host.hashCode()}")
+
+            .setShortLabel(label)
+            .setLongLabel(st.url)
+            .setIcon(Icon.createWithResource(appCtx, R.mipmap.ic_launcher))
+            .setIntent(intent)
+            .build()
+        val ok = runCatching { shortcutManager.requestPinShortcut(info, null) }.getOrDefault(false)
+        showToast(if (ok) "Confirm the shortcut on your home screen" else "Shortcut request was rejected")
+    }
+
+    /** Serializes bookmarks + speed dials into a JSON backup file chosen via SAF. */
+    fun exportUserData(targetUri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val bookmarks = repository.bookmarks.first()
+                val dials = repository.speedDials.first()
+                val json = JSONObject().apply {
+                    put("version", 1)
+                    put("exportedAt", System.currentTimeMillis())
+                    put(
+                        "bookmarks",
+                        JSONArray().apply {
+                            bookmarks.forEach { b ->
+                                put(
+                                    JSONObject().apply {
+                                        put("title", b.title)
+                                        put("url", b.url)
+                                        put("folder", b.folder)
+                                    }
+                                )
+                            }
+                        }
+                    )
+                    put(
+                        "speedDials",
+                        JSONArray().apply {
+                            dials.forEach { d ->
+                                put(
+                                    JSONObject().apply {
+                                        put("title", d.title)
+                                        put("url", d.url)
+                                    }
+                                )
+                            }
+                        }
+                    )
+                }.toString(2)
+                appContext.contentResolver.openOutputStream(targetUri)?.use { out ->
+                    out.write(json.toByteArray(Charsets.UTF_8))
+                } ?: error("Could not open the selected file for writing")
+            }.onSuccess {
+                showToast("Backup saved (bookmarks + speed dials)")
+            }.onFailure {
+                showToast("Backup failed: ${it.message ?: it.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /** Restores bookmarks + speed dials from a previously exported SAB JSON backup. */
+    fun importUserData(sourceUri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val text = appContext.contentResolver.openInputStream(sourceUri)?.use { input ->
+                    input.readBytes().toString(Charsets.UTF_8)
+                } ?: error("Could not open the selected file")
+                val root = JSONObject(text)
+                val bookmarksArr = root.optJSONArray("bookmarks")
+                val dialsArr = root.optJSONArray("speedDials")
+                var restoredBookmarks = 0
+                var restoredDials = 0
+                if (bookmarksArr != null) {
+                    for (i in 0 until bookmarksArr.length()) {
+                        val obj = bookmarksArr.optJSONObject(i) ?: continue
+                        val url = obj.optString("url").trim()
+                        if (url.isBlank()) continue
+                        repository.addBookmark(
+                            title = obj.optString("title").ifBlank { url },
+                            url = url,
+                            folder = obj.optString("folder").ifBlank { "Imported" }
+                        )
+                        restoredBookmarks += 1
+                    }
+                }
+                if (dialsArr != null) {
+                    for (i in 0 until dialsArr.length()) {
+                        val obj = dialsArr.optJSONObject(i) ?: continue
+                        val url = obj.optString("url").trim()
+                        if (url.isBlank()) continue
+                        repository.addSpeedDial(
+                            title = obj.optString("title").ifBlank { url },
+                            url = url
+                        )
+                        restoredDials += 1
+                    }
+                }
+                if (restoredBookmarks + restoredDials == 0) {
+                    error("No bookmarks or speed dials found in this backup")
+                }
+                "Restored $restoredBookmarks bookmark(s) and $restoredDials speed dial(s)"
+            }
+            result.onSuccess { showToast(it) }
+                .onFailure { showToast("Import failed: ${it.message ?: it.javaClass.simpleName}") }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        readAloudInstance?.release()
         downloadManager.release()
         synchronized(promptQueue) {
             _activePrompt.value?.cancelSilently()
