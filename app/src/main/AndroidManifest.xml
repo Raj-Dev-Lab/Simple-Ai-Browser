@@ -25,6 +25,18 @@
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
         android:theme="@style/Theme.SabBrowser">
+        <!-- Recovery launcher: second home-screen icon, plain Views only, no engine/VM/Compose.
+             Opens even when the main app crashes on every launch; exposes the crash report and
+             one-tap safe mode. -->
+        <activity
+            android:name=".SabRecoveryActivity"
+            android:exported="true"
+            android:label="SAB Recovery">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".MainActivity"
             android:exported="true"

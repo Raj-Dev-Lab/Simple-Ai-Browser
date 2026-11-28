@@ -3,6 +3,18 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.2] - 2026-11-28
+
+### Fixed
+- **THE startup crash — database migration locked upgrading users out (root cause)**: every user upgrading from v1.3.x (or earlier) crashed on launch with `IllegalStateException: Migration didn't properly handle downloads`, forever, before any UI could render. The v1.4.0 download-manager migration (`3→4`) added 15 `NOT NULL … DEFAULT` columns to the `downloads` table without declaring the matching `@ColumnInfo(defaultValue = …)` in the entity — Room's schema validation then rejected the migrated database on every open. Fresh installs never ran the migration (which is why all tests passed), and the crash is independent of the engine, so v1.6.1's safe mode could not touch it. Fixed by declaring the exact default values, plus a new regression test that rebuilds a real v1.3 database and migrates it through `3→5`, asserting the app opens with user data preserved.
+- **Corrupted preferences file self-heals**: the settings store now uses `ReplaceFileCorruptionHandler` — if the preferences file is damaged (e.g. the process was killed mid-write by a routing restart), the file is replaced with defaults instead of throwing on every read and write.
+- **Last-resort database net**: if a future upgrade path is ever missing, Room rebuilds the database (`fallbackToDestructiveMigration`) instead of crashing on every launch. Normal upgrades keep all data through the real migrations.
+
+### Added
+- **Engine lockout escalation**: if a startup crash loop persists even after safe mode removes the routing profile, SAB stops creating GeckoView entirely and runs on the built-in fallback engine until you re-enable it in Settings → DIAGNOSTICS ("Re-enable GeckoView engine").
+- **SAB Recovery launcher**: a second home-screen icon ("SAB Recovery") that opens even when the main app cannot start — plain Android Views, no browser engine, no Compose. It shows boot status and the recorded crash report, with **Share crash report**, **Start in safe mode**, **Clear diagnostics**, and **Open SAB normally**.
+- 7 new tests: full-startup reproduction (boots MainActivity through the real Compose composition), the v1.3→v5 database upgrade, escalation ladder (safe mode → lockout), and the recovery activity end-to-end.
+
 ## [1.6.1] - 2026-11-28
 
 ### Fixed

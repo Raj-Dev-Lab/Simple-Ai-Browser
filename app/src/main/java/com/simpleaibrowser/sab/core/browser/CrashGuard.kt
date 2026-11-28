@@ -28,6 +28,8 @@ object BootGuard {
     private const val PREFS_NAME = "sab_boot_guard"
     private const val KEY_BOOT_FAILURES = "boot_failures"
     private const val KEY_SAFE_MODE_NOTICE = "safe_mode_notice_pending"
+    private const val KEY_SAFE_MODE_TRIED = "safe_mode_tried"
+    private const val KEY_ENGINE_LOCKOUT = "engine_lockout"
     private const val SAFE_MODE_THRESHOLD = 2
 
     fun bootPrefs(context: Context): SharedPreferences =
@@ -40,11 +42,17 @@ object BootGuard {
         }
     }
 
-    /** Called once the app actually reached an interactive UI — a successful boot. */
+    /**
+     * Called once the app actually reached an interactive UI — a successful boot. Resets the
+     * failure counter and the safe-mode-tried latch, but NOT the engine lockout: after two
+     * full crash loops the fallback engine stays in place until the user explicitly re-enables
+     * GeckoView in Settings → Diagnostics.
+     */
     fun markInteractive(context: Context) {
         bootPrefs(context).edit()
             .putInt(KEY_BOOT_FAILURES, 0)
             .putBoolean(KEY_SAFE_MODE_NOTICE, false)
+            .putBoolean(KEY_SAFE_MODE_TRIED, false)
             .apply()
     }
 
@@ -54,26 +62,51 @@ object BootGuard {
     fun isSafeModeNoticePending(context: Context): Boolean =
         bootPrefs(context).getBoolean(KEY_SAFE_MODE_NOTICE, false)
 
+    /** Sticky lockout: force the CompatWebViewEngine after repeated startup crash loops. */
+    fun isEngineLockout(context: Context): Boolean =
+        bootPrefs(context).getBoolean(KEY_ENGINE_LOCKOUT, false)
+
+    fun setEngineLockout(context: Context, enabled: Boolean) {
+        bootPrefs(context).edit().putBoolean(KEY_ENGINE_LOCKOUT, enabled).apply()
+    }
+
     /** Crash loops (>= threshold failed boots) trigger safe mode and clear the notice flag. */
     fun shouldEnterSafeMode(context: Context): Boolean =
         getBootFailures(context) >= SAFE_MODE_THRESHOLD
 
     /**
-     * Engine-creation hook. Enters safe mode when a crash loop is detected: the routing prefs
-     * file (the one generated startup input for Gecko) is deleted and the user gets a notice.
-     * Returns true when safe mode was entered.
+     * Engine-creation hook with a two-stage escalation ladder:
+     *
+     *  1. First crash loop (>= 2 failed boots, safe mode not tried yet): SAFE MODE — the
+     *     routing prefs file (the one generated startup input for Gecko) is deleted so
+     *     GeckoView boots clean.
+     *  2. Second crash loop (>= 2 more failed boots with safe mode already tried): ENGINE
+     *     LOCKOUT — the factory stops creating GeckoView entirely and uses the WebView
+     *     fallback, which survives even a broken Gecko native setup. The lockout is sticky;
+     *     Settings → Diagnostics offers an explicit re-enable.
+     *
+     * Returns true when a recovery action was taken on this boot.
      */
     fun enterSafeModeIfCrashLooping(context: Context): Boolean {
         if (!shouldEnterSafeMode(context)) return false
+        val triedBefore = bootPrefs(context).getBoolean(KEY_SAFE_MODE_TRIED, false)
         val removed = SecureRouting.prefsFile(context).delete()
-        bootPrefs(context).edit()
-            .putInt(KEY_BOOT_FAILURES, 0)
-            .putBoolean(KEY_SAFE_MODE_NOTICE, true)
-            .apply()
+        bootPrefs(context).edit().apply {
+            putInt(KEY_BOOT_FAILURES, 0)
+            putBoolean(KEY_SAFE_MODE_NOTICE, true)
+            putBoolean(KEY_SAFE_MODE_TRIED, true)
+            if (triedBefore) putBoolean(KEY_ENGINE_LOCKOUT, true)
+            apply()
+        }
         Log.w(
             "SabBootGuard",
-            "Crash loop detected (>= $SAFE_MODE_THRESHOLD failed boots). " +
-                "Safe mode: routing prefs file removed=$removed"
+            if (triedBefore) {
+                "Crash loop CONTINUES after safe mode — engine lockout active " +
+                    "(routing prefs file removed=$removed)"
+            } else {
+                "Crash loop detected (>= $SAFE_MODE_THRESHOLD failed boots). " +
+                    "Safe mode: routing prefs file removed=$removed"
+            }
         )
         return true
     }
@@ -90,6 +123,7 @@ object CrashGuard {
         val engineSummary: String,
         val bootFailures: Int,
         val safeModeNotice: Boolean,
+        val engineLockout: Boolean,
         val routingPrefsFilePresent: Boolean,
         val routingModeLabel: String,
         val lastCrash: CrashReport?

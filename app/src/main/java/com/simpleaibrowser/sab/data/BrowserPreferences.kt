@@ -2,6 +2,7 @@ package com.simpleaibrowser.sab.data
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -25,7 +26,14 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import java.io.IOException
 
-private val Context.sabDataStore: DataStore<Preferences> by preferencesDataStore(name = "sab_preferences")
+// Self-healing store: if the preferences file is ever corrupted (e.g. the process was killed
+// by a restart mid-write), ReplaceFileCorruptionHandler replaces the broken file with empty
+// preferences instead of throwing on every subsequent read AND write. The flow-level .catch
+// below stays as defense in depth.
+private val Context.sabDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "sab_preferences",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() }
+)
 
 data class BrowserSettings(
     val adBlockEnabled: Boolean = true,

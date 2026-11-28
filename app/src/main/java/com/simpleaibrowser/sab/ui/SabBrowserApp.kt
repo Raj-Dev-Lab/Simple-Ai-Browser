@@ -713,6 +713,7 @@ fun SabBrowserApp(
                             }
                         },
                         onClearDiagnostics = { viewModel.clearDiagnostics() },
+                        onReEnableGeckoEngine = { viewModel.reEnableGeckoEngine() },
                         onClearAllData = { viewModel.clearAllBrowsingData() },
                         onDismiss = { viewModel.closeOverlay() }
                     )

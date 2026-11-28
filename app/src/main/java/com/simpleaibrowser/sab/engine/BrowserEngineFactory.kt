@@ -3,6 +3,7 @@ package com.simpleaibrowser.sab.engine
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.simpleaibrowser.sab.core.browser.BootGuard
 import com.simpleaibrowser.sab.core.browser.BrowserEngine
 import com.simpleaibrowser.sab.engine.compat.CompatWebViewEngine
 import com.simpleaibrowser.sab.engine.gecko.GeckoEngineAdapter
@@ -28,6 +29,16 @@ object BrowserEngineFactory {
     }
 
     private fun createInternal(appContext: Context): BrowserEngine {
+        // BootGuard escalation: after two consecutive crash loops where safe mode (removing
+        // the routing prefs file) did not cure the startup crashes, stop creating GeckoView
+        // entirely and run on the WebView fallback until the user re-enables it.
+        if (BootGuard.isEngineLockout(appContext)) {
+            Log.w(TAG, "Engine lockout active after repeated startup crash loops; using CompatWebViewEngine.")
+            return CompatWebViewEngine(
+                context = appContext,
+                fallbackReason = "Engine lockout (startup crash recovery)"
+            )
+        }
         val hasSupportedAbi = Build.SUPPORTED_ABIS.any { abi ->
             supportedGeckoAbis.any { it.equals(abi, ignoreCase = true) }
         }

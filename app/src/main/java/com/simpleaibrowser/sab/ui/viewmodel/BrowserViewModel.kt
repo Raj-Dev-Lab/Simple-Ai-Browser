@@ -1793,6 +1793,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 safeModeNotice = runCatching {
                     BootGuard.isSafeModeNoticePending(ctx)
                 }.getOrDefault(false),
+                engineLockout = runCatching {
+                    BootGuard.isEngineLockout(ctx)
+                }.getOrDefault(false),
                 routingPrefsFilePresent = runCatching {
                     SecureRouting.prefsFile(ctx).exists()
                 }.getOrDefault(false),
@@ -1801,6 +1804,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             )
             _diagnostics.value = snapshot
         }
+    }
+
+    /** Clears the sticky engine lockout so the next app restart uses GeckoView again. */
+    fun reEnableGeckoEngine() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { BootGuard.setEngineLockout(appContext, false) }
+            loadDiagnostics()
+        }
+        showToast("GeckoView re-enabled — restart SAB to switch back to the fast engine")
     }
 
     fun clearDiagnostics() {

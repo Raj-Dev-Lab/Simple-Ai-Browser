@@ -422,6 +422,7 @@ fun SettingsScreen(
     onLoadDiagnostics: () -> Unit = {},
     onShareCrashReport: () -> Unit = {},
     onClearDiagnostics: () -> Unit = {},
+    onReEnableGeckoEngine: () -> Unit = {},
     onClearAllData: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1225,6 +1226,16 @@ fun SettingsScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.error
                                     )
+                                }
+                                if (snap.engineLockout) {
+                                    Text(
+                                        "⚠ Recovery mode: after repeated startup crashes SAB is running on the built-in fallback engine instead of GeckoView.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    OutlinedButton(onClick = onReEnableGeckoEngine) {
+                                        Text("Re-enable GeckoView engine")
+                                    }
                                 }
                                 Text(
                                     "Secure Routing: ${snap.routingModeLabel} • prefs file " +

@@ -2,6 +2,7 @@ package com.simpleaibrowser.sab.data
 
 import android.content.Context
 import androidx.room.Dao
+import androidx.room.ColumnInfo
 import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Insert
@@ -51,28 +52,32 @@ data class DownloadEntity(
     val sizeBytes: Long = -1L,
     val createdAt: Long = System.currentTimeMillis(),
     val localUri: String? = null,
-    val taskId: String = UUID.randomUUID().toString(),
-    val kind: String = "file",
-    val status: String = "completed",
-    val downloadedBytes: Long = 0L,
-    val speedBytesPerSec: Long = 0L,
-    val etaSeconds: Long = -1L,
-    val connectionsCount: Int = 1,
-    val supportsRange: Boolean = false,
-    val stagingPath: String = "",
+    // CRITICAL: every defaultValue below MUST match the DEFAULT clause MIGRATION_3_4 adds.
+    // Room validates the migrated SQLite schema against the entity schema; a missing
+    // defaultValue here makes Room throw "Migration didn't properly handle downloads" when
+    // the database opens — a permanent crash-on-launch for every upgrading user.
+    @ColumnInfo(defaultValue = "") val taskId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "file") val kind: String = "file",
+    @ColumnInfo(defaultValue = "completed") val status: String = "completed",
+    @ColumnInfo(defaultValue = "0") val downloadedBytes: Long = 0L,
+    @ColumnInfo(defaultValue = "0") val speedBytesPerSec: Long = 0L,
+    @ColumnInfo(defaultValue = "-1") val etaSeconds: Long = -1L,
+    @ColumnInfo(defaultValue = "1") val connectionsCount: Int = 1,
+    @ColumnInfo(defaultValue = "0") val supportsRange: Boolean = false,
+    @ColumnInfo(defaultValue = "") val stagingPath: String = "",
     val publicUri: String? = null,
-    val subfolder: String = "",
+    @ColumnInfo(defaultValue = "") val subfolder: String = "",
     val etag: String? = null,
     val segmentsJson: String? = null,
     val torrentInfoHash: String? = null,
     val torrentFilesJson: String? = null,
-    val torrentPeers: Int = 0,
-    val torrentSeeds: Int = 0,
-    val sequentialTorrent: Boolean = false,
-    val wifiOnly: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val torrentPeers: Int = 0,
+    @ColumnInfo(defaultValue = "0") val torrentSeeds: Int = 0,
+    @ColumnInfo(defaultValue = "0") val sequentialTorrent: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val wifiOnly: Boolean = false,
     val errorMessage: String? = null,
     val sha256: String? = null,
-    val completedAt: Long = 0L
+    @ColumnInfo(defaultValue = "0") val completedAt: Long = 0L
 )
 
 @Entity(tableName = "saved_tabs")
@@ -499,6 +504,11 @@ abstract class SabDatabase : RoomDatabase() {
                     "sab_browser.db"
                 )
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    // Last-resort net: if a future upgrade path is ever missing or a schema is
+                    // damaged beyond repair, rebuild the database instead of crashing on every
+                    // launch. Normal upgrades go through the real migrations above and keep
+                    // all data; only an unmatched path (or an unrecoverable schema) is reset.
+                    .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { instance = it }
             }
