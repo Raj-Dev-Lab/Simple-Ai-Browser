@@ -12,6 +12,7 @@ import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
 import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.PrivacyConfig
+import com.simpleaibrowser.sab.core.browser.SecureRouting
 import com.simpleaibrowser.sab.core.browser.SessionCallbacks
 import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
@@ -292,7 +293,7 @@ class GeckoEngineAdapter(
             )
             .build()
 
-        val settings = GeckoRuntimeSettings.Builder()
+        val settingsBuilder = GeckoRuntimeSettings.Builder()
             .javaScriptEnabled(true)
             .webFontsEnabled(true)
             .automaticFontSizeAdjustment(true)
@@ -301,7 +302,19 @@ class GeckoEngineAdapter(
             .contentBlocking(contentBlocking)
             .extensionsWebAPIEnabled(true)
             .extensionsProcessEnabled(true)
-            .build()
+
+        // Secure Routing: when a routing profile is active, the generated user.js-style prefs
+        // file forces all Gecko page traffic (and DNS) through SOCKS5 (Tor/Orbot, trusted
+        // SOCKS5, or an explicitly experimental public relay candidate). GeckoRuntime reads it
+        // at creation, so routing changes take effect at next launch; tabs are restored by
+        // session hydration.
+        val routingPrefsFile = SecureRouting.prefsFile(context)
+        if (routingPrefsFile.exists() && routingPrefsFile.length() > 0) {
+            Log.i(TAG, "Secure Routing prefs detected: ${routingPrefsFile.name}")
+            settingsBuilder.configFilePath(routingPrefsFile.absolutePath)
+        }
+
+        val settings = settingsBuilder.build()
 
         return GeckoRuntime.create(context, settings)
     }

@@ -17,8 +17,8 @@ android {
     applicationId = "com.simpleaibrowser.sab"
     minSdk = 29
     targetSdk = 36
-    versionCode = 9
-    versionName = "1.5.0"
+    versionCode = 10
+    versionName = "1.6.0"
 
     ndk {
       abiFilters += listOf("arm64-v8a", "x86_64")

@@ -57,6 +57,7 @@ import com.simpleaibrowser.sab.core.browser.DetectedPageMedia
 import com.simpleaibrowser.sab.core.browser.DownloadKind
 import com.simpleaibrowser.sab.core.browser.DownloadTaskStatus
 import com.simpleaibrowser.sab.core.browser.SabViewerRequest
+import com.simpleaibrowser.sab.core.browser.SecureRouting
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.core.browser.WebPromptRequest
 import com.simpleaibrowser.sab.speech.SabReadAloud
@@ -76,6 +77,7 @@ import com.simpleaibrowser.sab.ui.screens.LinkContextBottomSheet
 import com.simpleaibrowser.sab.ui.screens.OperaMenuBottomSheet
 import com.simpleaibrowser.sab.ui.screens.PageMediaGrabberSheet
 import com.simpleaibrowser.sab.ui.screens.PrivacyShieldSheet
+import com.simpleaibrowser.sab.ui.screens.SecureRoutingUiState
 import com.simpleaibrowser.sab.ui.screens.SabMediaPlayerOverlay
 import com.simpleaibrowser.sab.ui.screens.SabPdfViewerOverlay
 import com.simpleaibrowser.sab.ui.screens.SettingsScreen
@@ -110,6 +112,22 @@ fun SabBrowserApp(
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val rememberedSitePermissions by viewModel.rememberedSitePermissions.collectAsStateWithLifecycle()
     val readAloud by viewModel.readAloudState.collectAsStateWithLifecycle()
+    val incognitoShieldPhase by viewModel.incognitoShieldState.collectAsStateWithLifecycle()
+    val activeRouting by viewModel.routingConfig.collectAsStateWithLifecycle()
+    val routingRestartNeeded by viewModel.routingPendingRestart.collectAsStateWithLifecycle()
+    val relayPhase by viewModel.relayState.collectAsStateWithLifecycle()
+    val orbotInstalled = remember { viewModel.isOrbotAvailable() }
+
+    val secureRoutingState = SecureRoutingUiState(
+        shieldEnabled = settings.incognitoAutoShieldEnabled,
+        shieldPhase = incognitoShieldPhase,
+        routingMode = activeRouting.mode,
+        socksHost = activeRouting.socksHost,
+        socksPort = activeRouting.socksPort,
+        pendingRestart = routingRestartNeeded,
+        relayPhase = relayPhase,
+        orbotInstalled = orbotInstalled
+    )
     val isBookmarked by viewModel.isActivePageBookmarked.collectAsStateWithLifecycle()
     val overlay by viewModel.overlay.collectAsStateWithLifecycle()
     val showSplash by viewModel.showSplash.collectAsStateWithLifecycle()
@@ -345,6 +363,7 @@ fun SabBrowserApp(
                     if (activeTab.isStartPage) {
                         SpeedDialStartPage(
                             isPrivate = activeTab.isPrivate,
+                            shieldPhase = incognitoShieldPhase,
                             settings = settings,
                             speedDials = speedDials,
                             engineInfo = viewModel.engineInfo,
@@ -639,6 +658,35 @@ fun SabBrowserApp(
                         onResetAllSitePermissions = { viewModel.resetAllSitePermissions() },
                         onExportData = { exportDataLauncher.launch("sab_backup_${System.currentTimeMillis()}.json") },
                         onImportData = { importDataLauncher.launch(arrayOf("application/json", "text/*")) },
+                        secureRouting = secureRoutingState,
+                        onToggleIncognitoShield = { viewModel.setIncognitoAutoShieldEnabled(it) },
+                        onSetRoutingMode = { mode ->
+                            when (mode) {
+                                SecureRouting.RoutingMode.OFF -> viewModel.setRoutingConfig(mode, "", 0)
+                                SecureRouting.RoutingMode.TOR_ORBOT ->
+                                    viewModel.setRoutingConfig(
+                                        mode,
+                                        SecureRouting.DEFAULT_TOR_HOST,
+                                        SecureRouting.DEFAULT_TOR_PORT
+                                    )
+                                SecureRouting.RoutingMode.SOCKS5 ->
+                                    viewModel.setRoutingConfig(
+                                        mode,
+                                        secureRoutingState.socksHost,
+                                        secureRoutingState.socksPort
+                                    )
+                                SecureRouting.RoutingMode.PUBLIC_RELAY -> Unit
+                            }
+                        },
+                        onRouteCustomSocks = { host, port ->
+                            viewModel.setRoutingConfig(SecureRouting.RoutingMode.SOCKS5, host, port)
+                        },
+                        onTestRoute = { host, port -> viewModel.testSocksRoute(host, port) },
+                        onStartRelayScan = { viewModel.startRelayScan() },
+                        onConfirmRelay = { viewModel.confirmPublicRelay(it) },
+                        onDismissRelayResults = { viewModel.dismissRelayResults() },
+                        onStopRouting = { viewModel.setRoutingConfig(SecureRouting.RoutingMode.OFF, "", 0) },
+                        onRestartForRouting = { viewModel.restartToApplyRouting() },
                         onClearAllData = { viewModel.clearAllBrowsingData() },
                         onDismiss = { viewModel.closeOverlay() }
                     )
@@ -801,6 +849,45 @@ fun SabBrowserApp(
                     onDismiss = { viewModel.closeViewer() }
                 )
                 null -> Unit
+            }
+
+            // Secure Routing status pill (always visible while a tunnel is active)
+            if (activeRouting.mode != SecureRouting.RoutingMode.OFF) {
+                Surface(
+                    color = if (activeRouting.mode == SecureRouting.RoutingMode.PUBLIC_RELAY) {
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.92f)
+                    } else {
+                        sabColors.chromeSurfaceElevated.copy(alpha = 0.95f)
+                    },
+                    shape = RoundedCornerShape(14),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(
+                            bottom = (if (isBottomAddressBar) 212.dp else 156.dp) +
+                                (if (toastMessage != null) 56.dp else 0.dp) +
+                                (if (readAloud.isActive) 64.dp else 0.dp)
+                        )
+                ) {
+                    Text(
+                        text = when (activeRouting.mode) {
+                            SecureRouting.RoutingMode.TOR_ORBOT ->
+                                "TUNNEL • TOR/ORBOT SOCKS5 ${activeRouting.socksHost}:${activeRouting.socksPort}"
+                            SecureRouting.RoutingMode.SOCKS5 ->
+                                "TUNNEL • TRUSTED SOCKS5 ${activeRouting.socksHost}:${activeRouting.socksPort}"
+                            SecureRouting.RoutingMode.PUBLIC_RELAY ->
+                                "⚠ PUBLIC PROXY RELAY — UNVERIFIED SERVERS • EXPERIMENTAL"
+                            SecureRouting.RoutingMode.OFF -> ""
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (activeRouting.mode == SecureRouting.RoutingMode.PUBLIC_RELAY) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
             }
 
             // Read Aloud mini player ("Listen to This Page")

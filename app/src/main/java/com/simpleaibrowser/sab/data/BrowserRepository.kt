@@ -7,6 +7,7 @@ import com.simpleaibrowser.sab.core.browser.DownloadManagerSettings
 import com.simpleaibrowser.sab.core.browser.ExtensionSource
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SearchEngine
+import com.simpleaibrowser.sab.core.browser.SecureRouting
 import com.simpleaibrowser.sab.core.browser.TabIsland
 import com.simpleaibrowser.sab.core.browser.TabUiState
 import com.simpleaibrowser.sab.core.browser.ThemePreset
@@ -374,6 +375,12 @@ class BrowserRepository(
         preferences.setDnsOverHttpsConfig(mode, customUrl, strict)
     suspend fun setClearPrivateDataOnExit(enabled: Boolean) = preferences.setClearPrivateDataOnExit(enabled)
     suspend fun setHttpsOnlyEnabled(enabled: Boolean) = preferences.setHttpsOnlyEnabled(enabled)
+
+    suspend fun setIncognitoAutoShieldEnabled(enabled: Boolean) =
+        preferences.setIncognitoAutoShieldEnabled(enabled)
+
+    suspend fun setRoutingConfig(mode: SecureRouting.RoutingMode, host: String, port: Int) =
+        preferences.setRoutingConfig(mode, host, port)
     suspend fun setForceDarkDefault(enabled: Boolean) = preferences.setForceDarkDefault(enabled)
     suspend fun setSearchEngine(engine: SearchEngine) = preferences.setSearchEngine(engine)
     suspend fun setThemePreset(preset: ThemePreset) = preferences.setThemePreset(preset)

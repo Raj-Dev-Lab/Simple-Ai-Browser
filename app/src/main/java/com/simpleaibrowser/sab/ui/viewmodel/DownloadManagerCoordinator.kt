@@ -88,13 +88,36 @@ class DownloadManagerCoordinator(
         }
     )
     val fileSystem = DownloadFileSystem(context)
-    private val httpClient = OkHttpClient.Builder()
+    private val baseHttpClient = OkHttpClient.Builder()
         .connectTimeout(25, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
-    private val segmentedDownloader = SegmentedHttpDownloader(httpClient)
+
+    /** Swap-in SOCKS5 routing (Tor/Orbot, trusted SOCKS5, experimental public relay). */
+    @Volatile
+    private var activeSocksProxy: java.net.Proxy? = null
+
+    private var httpClient: OkHttpClient = baseHttpClient
+
+    private var segmentedDownloader = SegmentedHttpDownloader(httpClient)
+
+    /**
+     * Applies Secure Routing to all app-level HTTP traffic (downloads, media, extension
+     * updates) immediately. Page-traffic routing is handled by the Gecko prefs file and
+     * takes effect at next launch.
+     */
+    fun updateSocksProxy(proxy: java.net.Proxy?) {
+        activeSocksProxy = proxy
+        httpClient = if (proxy == null) {
+            baseHttpClient
+        } else {
+            baseHttpClient.newBuilder().proxy(proxy).build()
+        }
+        segmentedDownloader = SegmentedHttpDownloader(httpClient)
+        Log.i(DL_COORD_TAG, "Secure routing updated for downloads: ${proxy != null}")
+    }
 
     private val torrentEngine = LibTorrentEngine(
         fileSystem = fileSystem,

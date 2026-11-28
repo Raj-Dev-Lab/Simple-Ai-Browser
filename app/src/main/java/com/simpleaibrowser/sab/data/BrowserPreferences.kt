@@ -18,6 +18,7 @@ import com.simpleaibrowser.sab.core.browser.PrivacyConfig
 import com.simpleaibrowser.sab.core.browser.SearchEngine
 import com.simpleaibrowser.sab.core.browser.StorageLocationMode
 import com.simpleaibrowser.sab.core.browser.ThemePreset
+import com.simpleaibrowser.sab.core.browser.SecureRouting
 import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -53,6 +54,10 @@ data class BrowserSettings(
     val showWallpaperOnStart: Boolean = true,
     val autoUpdateExtensions: Boolean = true,
     val lastExtensionUpdateCheckAt: Long = 0L,
+    val incognitoAutoShieldEnabled: Boolean = true,
+    val routingMode: SecureRouting.RoutingMode = SecureRouting.RoutingMode.OFF,
+    val routingSocksHost: String = SecureRouting.DEFAULT_TOR_HOST,
+    val routingSocksPort: Int = SecureRouting.DEFAULT_TOR_PORT,
     val downloadSettings: DownloadManagerSettings = DownloadManagerSettings()
 ) {
     fun toPrivacyConfig(): PrivacyConfig = PrivacyConfig(
@@ -123,6 +128,12 @@ class BrowserPreferences(private val context: Context) {
         val PRIV_DOH_CUSTOM_URL = stringPreferencesKey("priv_doh_custom_url")
         val PRIV_DOH_STRICT = booleanPreferencesKey("priv_doh_strict")
         val PRIV_CLEAR_ON_EXIT = booleanPreferencesKey("priv_clear_on_exit")
+
+        // Incognito Auto-Shield + Secure Routing
+        val SHIELD_AUTO_ENABLED = booleanPreferencesKey("incognito_auto_shield_enabled")
+        val ROUTING_MODE = stringPreferencesKey("routing_mode")
+        val ROUTING_SOCKS_HOST = stringPreferencesKey("routing_socks_host")
+        val ROUTING_SOCKS_PORT = intPreferencesKey("routing_socks_port")
     }
 
     val settingsFlow: Flow<BrowserSettings> = context.sabDataStore.data
@@ -159,6 +170,10 @@ class BrowserPreferences(private val context: Context) {
                 customDohUrl = prefs[Keys.PRIV_DOH_CUSTOM_URL].orEmpty(),
                 dohStrict = prefs[Keys.PRIV_DOH_STRICT] ?: false,
                 clearPrivateDataOnExit = prefs[Keys.PRIV_CLEAR_ON_EXIT] ?: false,
+                incognitoAutoShieldEnabled = prefs[Keys.SHIELD_AUTO_ENABLED] ?: true,
+                routingMode = SecureRouting.RoutingMode.fromId(prefs[Keys.ROUTING_MODE] ?: SecureRouting.RoutingMode.OFF.id),
+                routingSocksHost = prefs[Keys.ROUTING_SOCKS_HOST] ?: SecureRouting.DEFAULT_TOR_HOST,
+                routingSocksPort = (prefs[Keys.ROUTING_SOCKS_PORT] ?: SecureRouting.DEFAULT_TOR_PORT).coerceIn(1, 65535),
                 httpsOnlyEnabled = prefs[Keys.HTTPS_ONLY] ?: true,
                 forceDarkDefault = prefs[Keys.FORCE_DARK] ?: false,
                 searchEngine = SearchEngine.fromId(prefs[Keys.SEARCH_ENGINE] ?: SearchEngine.DUCKDUCKGO.id),
@@ -267,6 +282,18 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setHttpsOnlyEnabled(enabled: Boolean) {
         context.sabDataStore.edit { it[Keys.HTTPS_ONLY] = enabled }
+    }
+
+    suspend fun setIncognitoAutoShieldEnabled(enabled: Boolean) {
+        context.sabDataStore.edit { it[Keys.SHIELD_AUTO_ENABLED] = enabled }
+    }
+
+    suspend fun setRoutingConfig(mode: SecureRouting.RoutingMode, host: String, port: Int) {
+        context.sabDataStore.edit {
+            it[Keys.ROUTING_MODE] = mode.id
+            it[Keys.ROUTING_SOCKS_HOST] = host
+            it[Keys.ROUTING_SOCKS_PORT] = port
+        }
     }
 
     suspend fun setForceDarkDefault(enabled: Boolean) {

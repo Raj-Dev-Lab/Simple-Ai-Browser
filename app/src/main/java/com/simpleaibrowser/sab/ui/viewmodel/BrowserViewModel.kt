@@ -24,12 +24,16 @@ import com.simpleaibrowser.sab.core.browser.ContextMenuTarget
 import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
 import com.simpleaibrowser.sab.core.browser.DetectedPageMedia
 import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
+import com.simpleaibrowser.sab.core.browser.IncognitoShield
+import com.simpleaibrowser.sab.core.browser.SecureRouting
+import com.simpleaibrowser.sab.core.network.PublicProxyRelay
 import com.simpleaibrowser.sab.core.browser.DownloadManagerSettings
 import com.simpleaibrowser.sab.core.browser.DownloadRequest
 import com.simpleaibrowser.sab.core.browser.DownloadSourceType
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.core.browser.FindInPageResult
 import com.simpleaibrowser.sab.core.browser.IslandColor
+import com.simpleaibrowser.sab.core.browser.PrivacyConfig
 import com.simpleaibrowser.sab.core.browser.SAB_START_URL
 import com.simpleaibrowser.sab.core.browser.SabViewerRequest
 import com.simpleaibrowser.sab.core.browser.SearchEngine
@@ -69,15 +73,24 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.util.ArrayDeque
+import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 sealed interface BrowserOverlay {
@@ -320,8 +333,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             runCatching {
                 settings.collect { pref ->
+                    lastBrowserSettings = pref
                     engine.applyPrivacyConfig(pref.toPrivacyConfig())
                     engine.setPreferredDarkScheme(pref.themePreset.isDark)
+                    // A settings change must never silently downgrade an active Incognito
+                    // Auto-Shield, and disabling the shield must restore the normal posture.
+                    reapplyShieldIfNeeded(pref)
                 }
             }.onFailure { Log.e("SabViewModel", "Settings collector failed", it) }
         }
@@ -357,6 +374,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             activeSession.collect { session ->
                 engine.setActiveSession(session)
+                handleIncognitoShield(session?.isPrivate == true)
             }
         }
         viewModelScope.launch {
@@ -1500,6 +1518,260 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             result.onSuccess { showToast(it) }
                 .onFailure { showToast("Import failed: ${it.message ?: it.javaClass.simpleName}") }
         }
+    }
+
+    // --- Incognito Auto-Shield + Secure Routing + Public Proxy Relay ---
+
+    @Volatile
+    private var lastBrowserSettings: BrowserSettings? = null
+
+    private val _incognitoShield = MutableStateFlow<IncognitoShield.ShieldPhase>(IncognitoShield.ShieldPhase.Idle)
+    val incognitoShieldState: StateFlow<IncognitoShield.ShieldPhase> = _incognitoShield.asStateFlow()
+
+    @Volatile
+    private var lastShieldedPrivateMode: Boolean? = null
+
+    @Volatile
+    private var cachedShieldWinner: IncognitoShield.BenchmarkWinner? = null
+
+    private var shieldJob: Job? = null
+
+    /**
+     * Incognito Auto-Shield: entering a private tab forces the strictest privacy posture and
+     * auto-benchmarks trusted DoH providers; leaving it restores the user's normal settings.
+     */
+    private fun handleIncognitoShield(isPrivate: Boolean) {
+        if (isPrivate == lastShieldedPrivateMode) return
+        lastShieldedPrivateMode = isPrivate
+        if (!isPrivate) {
+            shieldJob?.cancel()
+            shieldJob = null
+            cachedShieldWinner = null
+            _incognitoShield.value = IncognitoShield.ShieldPhase.Idle
+            val normal = lastBrowserSettings
+            if (normal != null) {
+                runCatching { engine.applyPrivacyConfig(normal.toPrivacyConfig()) }
+            }
+            return
+        }
+        startIncognitoShield(lastBrowserSettings)
+    }
+
+    private fun startIncognitoShield(settings: BrowserSettings?) {
+        if (settings?.incognitoAutoShieldEnabled == false) return
+        val userConfig = settings?.toPrivacyConfig() ?: PrivacyConfig()
+        _incognitoShield.value = IncognitoShield.ShieldPhase.Benchmarking
+        shieldJob = viewModelScope.launch {
+            val winner = runCatching { IncognitoShield.benchmark() }.getOrNull()
+            if (!isActive) return@launch
+            cachedShieldWinner = winner
+            runCatching {
+                engine.applyPrivacyConfig(IncognitoShield.shieldedConfig(userConfig, winner))
+            }
+            _incognitoShield.value = IncognitoShield.ShieldPhase.Active(winner)
+            showToast(
+                if (winner != null) {
+                    "Incognito Shield ON • fastest secure DNS: ${winner.label} (${winner.bestLatencyMs} ms)"
+                } else {
+                    "Incognito Shield ON • strict defenses enforced • no secure DNS reachable"
+                }
+            )
+        }
+    }
+
+    /** Called on every settings change so the shield is never silently downgraded. */
+    private fun reapplyShieldIfNeeded(pref: BrowserSettings) {
+        val privateActive = activeSession.value?.isPrivate == true
+        if (privateActive && pref.incognitoAutoShieldEnabled) {
+            runCatching {
+                engine.applyPrivacyConfig(IncognitoShield.shieldedConfig(pref.toPrivacyConfig(), cachedShieldWinner))
+            }
+        } else if (!privateActive) {
+            runCatching { engine.applyPrivacyConfig(pref.toPrivacyConfig()) }
+        }
+    }
+
+    fun setIncognitoAutoShieldEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            runCatching { repository.setIncognitoAutoShieldEnabled(enabled) }
+        }
+        if (!enabled) {
+            shieldJob?.cancel()
+            shieldJob = null
+            cachedShieldWinner = null
+            _incognitoShield.value = IncognitoShield.ShieldPhase.Idle
+            lastShieldedPrivateMode = null
+            lastBrowserSettings?.let { normal ->
+                runCatching { engine.applyPrivacyConfig(normal.toPrivacyConfig()) }
+            }
+            showToast("Incognito Auto-Shield disabled")
+        } else {
+            showToast("Incognito Auto-Shield enabled")
+            if (activeSession.value?.isPrivate == true) {
+                startIncognitoShield(lastBrowserSettings)
+            }
+        }
+    }
+
+    /** Active Secure Routing profile (persisted; applied to Gecko at next launch). */
+    val routingConfig: StateFlow<SecureRouting.RoutingConfig> = settings
+        .map {
+            SecureRouting.RoutingConfig(it.routingMode, it.routingSocksHost, it.routingSocksPort)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = SecureRouting.RoutingConfig(SecureRouting.RoutingMode.OFF, "", 0)
+        )
+
+    private val _routingPendingRestart = MutableStateFlow(false)
+    val routingPendingRestart: StateFlow<Boolean> = _routingPendingRestart.asStateFlow()
+
+    private val _relayState = MutableStateFlow<PublicProxyRelay.RelayPhase>(PublicProxyRelay.RelayPhase.Idle)
+    val relayState: StateFlow<PublicProxyRelay.RelayPhase> = _relayState.asStateFlow()
+
+    private var relayScanJob: Job? = null
+
+    fun isOrbotAvailable(): Boolean = SecureRouting.isOrbotInstalled(appContext)
+
+    /**
+     * Persists a routing profile, writes the Gecko prefs file (page traffic applies at next
+     * launch) and swaps the app-level OkHttp clients to the SOCKS5 proxy immediately
+     * (downloads route right away).
+     */
+    fun setRoutingConfig(mode: SecureRouting.RoutingMode, host: String, port: Int) {
+        val normalizedHost = if (mode == SecureRouting.RoutingMode.TOR_ORBOT) {
+            SecureRouting.DEFAULT_TOR_HOST
+        } else {
+            host.trim()
+        }
+        val normalizedPort = if (mode == SecureRouting.RoutingMode.TOR_ORBOT) {
+            SecureRouting.DEFAULT_TOR_PORT
+        } else {
+            port
+        }
+        if (mode != SecureRouting.RoutingMode.OFF &&
+            (normalizedHost.isBlank() || normalizedPort !in 1..65535)
+        ) {
+            showToast("Enter a valid SOCKS5 host and port (1-65535)")
+            return
+        }
+        val config = SecureRouting.RoutingConfig(mode, normalizedHost, normalizedPort)
+        viewModelScope.launch {
+            runCatching { repository.setRoutingConfig(mode, normalizedHost, normalizedPort) }
+            SecureRouting.applyPrefsFile(appContext, config)
+            downloadManager.updateSocksProxy(SecureRouting.okHttpProxy(config))
+            _routingPendingRestart.value =
+                mode != SecureRouting.RoutingMode.OFF && engine.engineInfo.isGeckoViewActive
+            showToast(
+                when (mode) {
+                    SecureRouting.RoutingMode.OFF ->
+                        "Routing off • downloads direct now • page traffic restores at next launch"
+                    else ->
+                        "${mode.label} set • downloads route NOW • page traffic at next launch"
+                }
+            )
+        }
+    }
+
+    /** One-shot SOCKS5 reachability test (Tor/Orbot or custom endpoint). */
+    fun testSocksRoute(host: String, port: Int) {
+        val trimmed = host.trim()
+        if (trimmed.isBlank() || port !in 1..65535) {
+            showToast("Enter a valid host and port first")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val candidate = PublicProxyRelay.ProxyCandidate(trimmed, port, "manual-test")
+            val result = runCatching { PublicProxyRelay.probeCandidate(candidate) }.getOrNull()
+            showToast(
+                if (result != null) {
+                    "Route OK • ${result.latencyMs} ms • exit IP ${result.exitIp ?: "unknown"}" +
+                        (result.countryCode?.let { " ($it)" } ?: "")
+                } else {
+                    "Route unreachable — is the proxy/Tor running at $trimmed:$port?"
+                }
+            )
+        }
+    }
+
+    /**
+     * Public Proxy Relay scan (EXPERIMENTAL): fetch public SOCKS5 feeds, probe every candidate
+     * through a real SOCKS5 connection, rank the working ones. The user must explicitly pick
+     * one from the confirmation prompt before anything is routed.
+     */
+    fun startRelayScan() {
+        if (relayScanJob?.isActive == true) return
+        _relayState.value = PublicProxyRelay.RelayPhase.Fetching
+        relayScanJob = viewModelScope.launch {
+            val client = OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .build()
+            val rawLists = runCatching {
+                PublicProxyRelay.FEED_URLS.map { url ->
+                    runCatching {
+                        client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                            if (resp.isSuccessful) resp.body?.string().orEmpty() else ""
+                        }
+                    }.getOrDefault("")
+                }.joinToString("\n")
+            }.getOrDefault("")
+            val candidates = PublicProxyRelay.parseSocks5Feed(rawLists)
+            if (candidates.isEmpty()) {
+                _relayState.value = PublicProxyRelay.RelayPhase.Failed(
+                    "No public proxies available right now (feeds unreachable or empty)"
+                )
+                return@launch
+            }
+            val total = candidates.size
+            _relayState.value = PublicProxyRelay.RelayPhase.Probing(total, 0)
+            val done = AtomicInteger(0)
+            val results = Collections.synchronizedList(ArrayList<PublicProxyRelay.RelayProbeResult>())
+            val probeSemaphore = Semaphore(12)
+            candidates.map { candidate ->
+                launch(Dispatchers.IO) {
+                    probeSemaphore.withPermit {
+                        runCatching { PublicProxyRelay.probeCandidate(candidate) }
+                            .getOrNull()?.let { results.add(it) }
+                        _relayState.value =
+                            PublicProxyRelay.RelayPhase.Probing(total, done.incrementAndGet())
+                    }
+                }
+            }.joinAll()
+            val ranked = PublicProxyRelay.rankResults(results)
+            if (ranked.isEmpty()) {
+                _relayState.value = PublicProxyRelay.RelayPhase.Failed(
+                    "None of the $total public proxies responded — try again later"
+                )
+            } else {
+                _relayState.value = PublicProxyRelay.RelayPhase.Ready(ranked)
+            }
+        }
+    }
+
+    /** Confirms a specific relay candidate (explicit user action after the warning). */
+    fun confirmPublicRelay(result: PublicProxyRelay.RelayProbeResult) {
+        setRoutingConfig(
+            SecureRouting.RoutingMode.PUBLIC_RELAY,
+            result.candidate.host,
+            result.candidate.port
+        )
+        _relayState.value = PublicProxyRelay.RelayPhase.Routed(result)
+    }
+
+    fun dismissRelayResults() {
+        if (_relayState.value is PublicProxyRelay.RelayPhase.Ready ||
+            _relayState.value is PublicProxyRelay.RelayPhase.Failed
+        ) {
+            _relayState.value = PublicProxyRelay.RelayPhase.Idle
+        }
+    }
+
+    /** Restarts the process so the Gecko prefs file (page-traffic routing) takes effect. */
+    fun restartToApplyRouting() {
+        showToast("Restarting to apply secure routing…")
+        SecureRouting.restartApp(appContext)
     }
 
     override fun onCleared() {

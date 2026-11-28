@@ -34,10 +34,16 @@ import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +62,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,10 +73,13 @@ import com.simpleaibrowser.sab.core.browser.AddressBarPosition
 import com.simpleaibrowser.sab.core.browser.CookieIsolationMode
 import com.simpleaibrowser.sab.core.browser.DnsOverHttpsMode
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.IncognitoShield
+import com.simpleaibrowser.sab.core.browser.SecureRouting
 import com.simpleaibrowser.sab.core.browser.SearchEngine
 import com.simpleaibrowser.sab.core.browser.SitePermissionStore
 import com.simpleaibrowser.sab.core.browser.ThemePreset
 import com.simpleaibrowser.sab.core.browser.TrackingProtectionLevel
+import com.simpleaibrowser.sab.core.network.PublicProxyRelay
 import com.simpleaibrowser.sab.core.browser.UrlResolver
 import com.simpleaibrowser.sab.data.BookmarkEntity
 import com.simpleaibrowser.sab.data.BrowserSettings
@@ -350,6 +360,18 @@ fun LibraryScreen(
     }
 }
 
+/** UI bundle for the Incognito Auto-Shield + Secure Routing sections of Settings. */
+data class SecureRoutingUiState(
+    val shieldEnabled: Boolean = true,
+    val shieldPhase: IncognitoShield.ShieldPhase = IncognitoShield.ShieldPhase.Idle,
+    val routingMode: SecureRouting.RoutingMode = SecureRouting.RoutingMode.OFF,
+    val socksHost: String = SecureRouting.DEFAULT_TOR_HOST,
+    val socksPort: Int = SecureRouting.DEFAULT_TOR_PORT,
+    val pendingRestart: Boolean = false,
+    val relayPhase: PublicProxyRelay.RelayPhase = PublicProxyRelay.RelayPhase.Idle,
+    val orbotInstalled: Boolean = false
+)
+
 @Composable
 fun SettingsScreen(
     settings: BrowserSettings,
@@ -384,6 +406,16 @@ fun SettingsScreen(
     onResetAllSitePermissions: () -> Unit = {},
     onExportData: () -> Unit = {},
     onImportData: () -> Unit = {},
+    secureRouting: SecureRoutingUiState = SecureRoutingUiState(),
+    onToggleIncognitoShield: (Boolean) -> Unit = {},
+    onSetRoutingMode: (SecureRouting.RoutingMode) -> Unit = {},
+    onRouteCustomSocks: (String, Int) -> Unit = { _, _ -> },
+    onTestRoute: (String, Int) -> Unit = { _, _ -> },
+    onStartRelayScan: () -> Unit = {},
+    onConfirmRelay: (PublicProxyRelay.RelayProbeResult) -> Unit = {},
+    onDismissRelayResults: () -> Unit = {},
+    onStopRouting: () -> Unit = {},
+    onRestartForRouting: () -> Unit = {},
     onClearAllData: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -910,6 +942,250 @@ fun SettingsScreen(
                     }
                 }
 
+                // Incognito Auto-Shield
+                item(key = "incognito_shield_section") {
+                    SettingsSectionCard(title = "INCOGNITO AUTO-SHIELD") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            SettingsSwitchRow(
+                                title = "Auto-harden Private Tabs",
+                                subtitle = "When a private tab opens, SAB benchmarks trusted secure DNS (Quad9, AdGuard, Cloudflare) and switches to the fastest working one, while forcing Strict tracking protection, fingerprinting defense, total cookie isolation, tracker-parameter stripping, bounce-tracking protection and local-network protection. Your normal settings return on regular tabs.",
+                                checked = secureRouting.shieldEnabled,
+                                onCheckedChange = onToggleIncognitoShield
+                            )
+                            val shieldStatus = when (val phase = secureRouting.shieldPhase) {
+                                is IncognitoShield.ShieldPhase.Active ->
+                                    if (phase.winner != null) {
+                                        "Shield active • fastest secure DNS: ${phase.winner.label} (${phase.winner.bestLatencyMs} ms)"
+                                    } else {
+                                        "Shield active • strict defenses enforced (no secure DNS reachable)"
+                                    }
+                                IncognitoShield.ShieldPhase.Benchmarking -> "Benchmarking secure DNS providers…"
+                                IncognitoShield.ShieldPhase.Idle -> "Waiting for a private tab…"
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Security,
+                                    contentDescription = null,
+                                    tint = sabColors.shieldGreen,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    shieldStatus,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = sabColors.subtleText
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Secure Routing (Experimental)
+                item(key = "secure_routing_section") {
+                    SettingsSectionCard(title = "SECURE ROUTING (EXPERIMENTAL)") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "Route page traffic AND DNS through SOCKS5. Tor/Orbot is genuinely private but slower. Downloads route immediately; page traffic applies after a relaunch. There are no fake \"free VPN\" claims here: public relays are unverified servers.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = sabColors.subtleText
+                            )
+
+                            RoutingModeRow(
+                                icon = Icons.Filled.Public,
+                                title = "No Routing",
+                                subtitle = "Direct connection using your normal network",
+                                selected = secureRouting.routingMode == SecureRouting.RoutingMode.OFF,
+                                onClick = { onSetRoutingMode(SecureRouting.RoutingMode.OFF) }
+                            )
+                            RoutingModeRow(
+                                icon = Icons.Filled.Router,
+                                title = "Tor / Orbot (SOCKS5 127.0.0.1:9050)",
+                                subtitle = if (secureRouting.orbotInstalled) {
+                                    "Orbot detected — start it in Orbot, then tap Test Route"
+                                } else {
+                                    "Install & start Orbot (org.torproject.android), then tap Test Route"
+                                },
+                                selected = secureRouting.routingMode == SecureRouting.RoutingMode.TOR_ORBOT,
+                                onClick = { onSetRoutingMode(SecureRouting.RoutingMode.TOR_ORBOT) }
+                            )
+                            RoutingModeRow(
+                                icon = Icons.Filled.Router,
+                                title = "Custom Trusted SOCKS5",
+                                subtitle = "Your own server (self-hosted or otherwise trusted)",
+                                selected = secureRouting.routingMode == SecureRouting.RoutingMode.SOCKS5,
+                                onClick = { onSetRoutingMode(SecureRouting.RoutingMode.SOCKS5) }
+                            )
+                            RoutingModeRow(
+                                icon = Icons.Filled.WarningAmber,
+                                title = "Public Proxy Relay ⚠ EXPERIMENTAL",
+                                subtitle = "Fetch + probe public lists, then pick a working relay. Unverified servers — use at your own risk.",
+                                selected = secureRouting.routingMode == SecureRouting.RoutingMode.PUBLIC_RELAY,
+                                onClick = onStartRelayScan
+                            )
+
+                            var hostValue by remember(secureRouting.socksHost) {
+                                mutableStateOf(secureRouting.socksHost)
+                            }
+                            var portValue by remember(secureRouting.socksPort) {
+                                mutableStateOf(secureRouting.socksPort.toString())
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = hostValue,
+                                    onValueChange = { hostValue = it },
+                                    label = { Text("SOCKS5 host") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1.4f)
+                                )
+                                OutlinedTextField(
+                                    value = portValue,
+                                    onValueChange = { input ->
+                                        portValue = input.filter { it.isDigit() }.take(5)
+                                    },
+                                    label = { Text("Port") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(0.8f)
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = {
+                                    onTestRoute(hostValue, portValue.toIntOrNull() ?: 0)
+                                }) {
+                                    Text("Test Route")
+                                }
+                                OutlinedButton(onClick = {
+                                    onRouteCustomSocks(hostValue, portValue.toIntOrNull() ?: 0)
+                                }) {
+                                    Text("Route Traffic")
+                                }
+                            }
+
+                            when (val relay = secureRouting.relayPhase) {
+                                PublicProxyRelay.RelayPhase.Fetching -> {
+                                    Text(
+                                        "Fetching public SOCKS5 lists…",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                                is PublicProxyRelay.RelayPhase.Probing -> {
+                                    Text(
+                                        "Probing public relays ${relay.done}/${relay.total}…",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    LinearProgressIndicator(
+                                        progress = {
+                                            if (relay.total == 0) 0f else relay.done.toFloat() / relay.total
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                                is PublicProxyRelay.RelayPhase.Ready -> {
+                                    Text(
+                                        "Working relays found (${relay.results.size}) — tap one to route:",
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    relay.results.take(5).forEach { probe ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { onConfirmRelay(probe) }
+                                                .padding(vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    "${probe.candidate.host}:${probe.candidate.port}",
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                                Text(
+                                                    "${probe.latencyMs} ms • exit ${probe.exitIp ?: "?"}" +
+                                                        (probe.countryCode?.let { " ($it)" } ?: ""),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = sabColors.subtleText
+                                                )
+                                            }
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = null,
+                                                tint = sabColors.shieldGreen
+                                            )
+                                        }
+                                        HorizontalDivider(color = sabColors.chromeBorder.copy(alpha = 0.4f))
+                                    }
+                                    TextButton(onClick = onDismissRelayResults) { Text("Dismiss") }
+                                }
+                                is PublicProxyRelay.RelayPhase.Routed -> {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.WarningAmber,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                "Routing via ${relay.result.candidate.host}:${relay.result.candidate.port}",
+                                                style = MaterialTheme.typography.titleSmall
+                                            )
+                                            Text(
+                                                "UNVERIFIED THIRD-PARTY SERVER — your traffic is visible to its operator. Not bank-grade security. Use at your own risk.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                    TextButton(onClick = onStopRouting) {
+                                        Text("Stop routing", color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                                is PublicProxyRelay.RelayPhase.Failed -> {
+                                    Text(
+                                        relay.message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    TextButton(onClick = onStartRelayScan) { Text("Retry scan") }
+                                }
+                                PublicProxyRelay.RelayPhase.Idle -> Unit
+                            }
+
+                            if (secureRouting.routingMode == SecureRouting.RoutingMode.PUBLIC_RELAY) {
+                                Text(
+                                    text = "⚠ PUBLIC PROXY RELAY (EXPERIMENTAL): you are routing through an unverified third-party server. Assume the operator can observe all traffic. Use only for casual, non-sensitive browsing.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+
+                            if (secureRouting.pendingRestart &&
+                                secureRouting.routingMode != SecureRouting.RoutingMode.OFF
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Page-traffic routing activates after a relaunch (tabs restore automatically).",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = sabColors.subtleText,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = onRestartForRouting) {
+                                        Icon(Icons.Filled.RestartAlt, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Restart now")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Data Backup
                 item(key = "data_backup_section") {
                     SettingsSectionCard(title = "DATA BACKUP") {
@@ -1395,6 +1671,59 @@ private fun SettingsSectionCard(
             Box(modifier = Modifier.padding(14.dp)) {
                 content()
             }
+        }
+    }
+}
+
+@Composable
+private fun RoutingModeRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val sabColors = LocalSabColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (selected) MaterialTheme.colorScheme.primary else sabColors.subtleText,
+            modifier = Modifier.size(22.dp)
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = sabColors.subtleText
+            )
+            if (selected) {
+                Text(
+                    text = "ACTIVE • downloads route now • page traffic after relaunch",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        if (selected) {
+            Icon(
+                Icons.Filled.Check,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

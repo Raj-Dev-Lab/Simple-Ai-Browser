@@ -3,6 +3,19 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.0] - 2026-11-28
+
+### Added
+- **Incognito Auto-Shield**: opening a private tab now automatically hardens the session regardless of regular-mode settings — Strict Enhanced Tracking Protection, fingerprinting defense, total cookie isolation, tracking-parameter stripping, bounce-tracking protection, local-network protection, safe browsing and HTTPS-only are forced ON — and restores your normal posture the moment you switch back to a regular tab. A status card on the private start page shows the live state, and Settings → INCOGNITO AUTO-SHIELD has the opt-out switch (on by default).
+- **Auto-benchmarked Secure DNS for incognito**: when the shield engages, SAB probes Quad9 Security, AdGuard DoH and Cloudflare 1.1.1.1 with real DNS-over-HTTPS JSON queries (2 attempts each, answer-validated, 2.5 s timeout) and switches to the fastest working resolver in strict mode; if none respond, your normal DNS setting is preserved — never silently disabled.
+- **Secure Routing (Tor/Orbot + custom SOCKS5)**: Settings → SECURE ROUTING routes all page traffic **and DNS** through a SOCKS5 endpoint — Tor/Orbot (127.0.0.1:9050, with Orbot-detection), your own trusted SOCKS5 server, or an explicitly experimental public relay. Implemented via Gecko's real proxy preferences (`network.proxy.*` incl. `socks_remote_dns`, verified against the GeckoView 161 artifact): page traffic activates at next launch (tabs restore automatically, one-tap restart provided), and all app-level HTTP traffic (downloads, media, extension updates) reroutes immediately. A persistent tunnel pill and a live reachability test ("Test Route" — reports latency and exit IP) keep the state visible.
+- **Public Proxy Relay (labeled Experimental)**: fetches maintained public SOCKS5 feeds (TheSpeedX, monosans, hookzof), probes every candidate through a genuine RFC-1928 SOCKS5 connection (12-way parallel, 4 s timeout), captures latency + exit IP + country, and shows the top working relays in a confirmation prompt — routing only happens after you explicitly pick one. Every screen carries the warning: **"Unverified third-party servers — use at your own risk. NOT bank-grade security."** This is not a VPN and is clearly labeled as such everywhere.
+- 18 new unit tests covering the shield config, DoH answer validation, feed parsing (plain lists + metadata suffixes + malformed lines), relay ranking and the routing prefs file.
+
+### Notes
+- GeckoView 161 exposes **no public per-session proxy API** (verified in the artifact's classes), so page-traffic routing uses Gecko's preferences config file (`GeckoRuntimeSettings.Builder.configFilePath`) — the same mechanism Firefox uses; it takes effect at runtime creation, hence the relaunch step. The Android WebView fallback engine cannot be SOCKS-routed at all (platform limitation) — routing applies to GeckoView sessions and app-level downloads.
+- Orbot must be started (in Orbot itself) for Tor routing to work; SAB detects the installed app and guides you, but it cannot start Orbot on your behalf.
+
 ## [1.5.0] - 2026-11-28
 
 ### Added

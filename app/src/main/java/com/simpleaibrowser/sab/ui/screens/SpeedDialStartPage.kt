@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.example.R
 import com.simpleaibrowser.sab.core.browser.EngineInfo
+import com.simpleaibrowser.sab.core.browser.IncognitoShield
 import com.simpleaibrowser.sab.data.BrowserSettings
 import com.simpleaibrowser.sab.data.SpeedDialEntity
 import com.simpleaibrowser.sab.ui.components.SiteFavicon
@@ -71,6 +72,7 @@ import com.simpleaibrowser.sab.ui.theme.SpaceGroteskFamily
 @Composable
 fun SpeedDialStartPage(
     isPrivate: Boolean,
+    shieldPhase: IncognitoShield.ShieldPhase = IncognitoShield.ShieldPhase.Idle,
     settings: BrowserSettings,
     speedDials: List<SpeedDialEntity>,
     engineInfo: EngineInfo,
@@ -242,6 +244,74 @@ fun SpeedDialStartPage(
                                 )
                                 Text(
                                     text = "SAB won't save history, cookies, or site cache for this tab.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = sabColors.subtleText
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Incognito Auto-Shield status card
+                item(key = "shield_card") {
+                    val (shieldTitle, shieldDetail, shieldTint) = when (val phase = shieldPhase) {
+                        IncognitoShield.ShieldPhase.Idle ->
+                            Triple(
+                                "Incognito Auto-Shield is off",
+                                "Enable it in Settings → Incognito Auto-Shield to auto-harden private tabs.",
+                                sabColors.subtleText
+                            )
+                        IncognitoShield.ShieldPhase.Benchmarking ->
+                            Triple(
+                                "Incognito Auto-Shield: benchmarking secure DNS…",
+                                "Testing Quad9, AdGuard and Cloudflare DoH latency; strict defenses are already active.",
+                                sabColors.privateAccent
+                            )
+                        is IncognitoShield.ShieldPhase.Active ->
+                            if (phase.winner != null) {
+                                Triple(
+                                    "Incognito Auto-Shield active",
+                                    "Fastest secure DNS: ${phase.winner.label} (${phase.winner.bestLatencyMs} ms) • Strict ETP, fingerprinting defense, total cookie isolation, tracker-param stripping and LAN protection enforced.",
+                                    sabColors.shieldGreen
+                                )
+                            } else {
+                                Triple(
+                                    "Incognito Auto-Shield active",
+                                    "Strict ETP, fingerprinting defense, total cookie isolation, tracker-param stripping and LAN protection enforced. No secure DNS reachable — your normal DNS stays.",
+                                    sabColors.shieldGreen
+                                )
+                            }
+                    }
+                    Surface(
+                        color = sabColors.shieldGreen.copy(alpha = 0.10f),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                1.dp,
+                                shieldTint.copy(alpha = 0.45f),
+                                RoundedCornerShape(18.dp)
+                            )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Shield,
+                                contentDescription = null,
+                                tint = shieldTint,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = shieldTitle,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = shieldDetail,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = sabColors.subtleText
                                 )
