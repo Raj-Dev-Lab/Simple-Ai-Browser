@@ -412,6 +412,12 @@ class GeckoTabSession(
             if (isReleased) return@post
             runCatching {
                 nativePort = null
+                // After a crash/kill the session is still marked "open" app-side, so a bare
+                // open() is a silent no-op and the tab would stay blank. Close first (the
+                // documented recovery pattern, same as Firefox's own engine), then reopen.
+                if (geckoSession.isOpen) {
+                    geckoSession.close()
+                }
                 geckoSession.open(runtime)
                 isOpened = true
                 val stateToRestore = lastSessionState

@@ -279,6 +279,10 @@ class SegmentedHttpDownloader(
             knownTotalBytes = totalBytes,
             supportsRange = supportsRange,
             etag = probe?.etag ?: knownEtag,
+            // If the server content changed since the last session (ETag mismatch), the bytes
+            // already in the .sabpart file no longer match the remote file — appending them
+            // would produce a corrupted download, so resume must start over instead.
+            resumeFromExisting = !etagChanged,
             mimeType = probe?.mimeType,
             userAgent = userAgent,
             referrer = referrer,
@@ -381,7 +385,11 @@ class SegmentedHttpDownloader(
 
                     try {
                         client.newCall(req).execute().use { resp ->
-                            if (resp.code != 206 && resp.code != 200) {
+                            // A 200 response means the server ignored our Range header and sent
+                            // the file from byte 0. That is only safe for a fresh segment that
+                            // starts at byte 0 — any other segment would be written with bytes
+                            // from the wrong file offset (silent corruption).
+                            if (resp.code != 206 && !(resp.code == 200 && seg.startByte == 0L && seg.downloadedBytes == 0L)) {
                                 throw IOException("HTTP ${resp.code} ${resp.message}")
                             }
                             val body = resp.body ?: throw IOException("Empty response body")
@@ -483,6 +491,7 @@ class SegmentedHttpDownloader(
         knownTotalBytes: Long,
         supportsRange: Boolean,
         etag: String?,
+        resumeFromExisting: Boolean,
         mimeType: String?,
         userAgent: String?,
         referrer: String?,
@@ -492,7 +501,7 @@ class SegmentedHttpDownloader(
         speedLimitKbpsProvider: () -> Int,
         onProgress: suspend (HttpDownloadProgress) -> Unit
     ): HttpTransferOutcome {
-        val existingBytes = if (supportsRange && partFile.exists()) partFile.length() else 0L
+        val existingBytes = if (supportsRange && resumeFromExisting && partFile.exists()) partFile.length() else 0L
         val builder = buildRequest(url, userAgent, referrer).get()
         if (existingBytes > 0L) {
             builder.header("Range", "bytes=$existingBytes-")

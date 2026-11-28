@@ -3,6 +3,15 @@
 All notable changes to **Simple AI Browser (SAB)** are documented in this file.  
 This project adheres to [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.1] - 2026-11-26
+
+### Fixed
+- **Splash animation no longer janks**: every animated property (logo scale/rotation/alpha, wordmark fade/offset, aura radius) now runs in the GPU draw phase (`graphicsLayer` / draw lambdas) instead of recomposing the whole overlay on every frame; the full-screen aura gradient is rasterized once per size at its maximum radius and then GPU-scaled instead of allocating a new radial-gradient shader ~60 times per second; the orbit-ring sweep gradient and the engine-status label are cached instead of being rebuilt per frame. The brand logo asset is now 512×512 (identical on every device — it never renders above 496 px) and the start-page wallpaper decodes off the main thread via Coil while it is still hidden behind the opaque splash, removing the two main-thread bitmap decodes from the splash window.
+- **Crash recovery actually recovers**: after a content crash or background memory reclaim the session was still flagged "open", so `GeckoSession.open()` was a silent no-op and the tab stayed blank forever. Recovery now closes the dead session first (the documented Firefox-engine pattern) before reopening it and restoring the saved `SessionState`.
+- **Single-stream download resume corruption**: resuming a plain (non-segmented) download now starts over instead of appending when the server's `ETag` changed since the last session — appending mismatched bytes silently corrupted the file. The segmented path already had this guard.
+- **Segmented download corruption when a server ignores `Range`**: a `200 OK` answer to a ranged segment request is now only accepted for a fresh segment that starts at byte 0; other segments previously could be written from the wrong file offset when a CDN stripped the `Range` header.
+- **File-vault containment hardening**: the download vault's path checks now compare full path segments (canonical root + separator), so a sibling directory sharing a name prefix can never be created into, renamed into, or deleted by mistake.
+
 ## [1.4.0] - 2026-11-26
 
 ### Added

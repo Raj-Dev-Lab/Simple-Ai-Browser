@@ -92,11 +92,18 @@ class DownloadFileSystem(private val context: Context) {
         val clean = sanitizeRelativeSubpath(relativeSubpath)
         val root = vaultRoot()
         val target = if (clean.isBlank()) root else File(root, clean)
-        if (!target.canonicalPath.startsWith(root.canonicalPath)) {
+        if (!isInsideVault(target)) {
             return root
         }
         if (!target.exists()) target.mkdirs()
         return target
+    }
+
+    /** Containment check that cannot be fooled by a sibling directory sharing a name prefix. */
+    private fun isInsideVault(target: File): Boolean {
+        val rootPath = vaultRoot().canonicalPath
+        val targetPath = target.canonicalPath
+        return targetPath.startsWith(rootPath + File.separator) || targetPath == rootPath
     }
 
     fun resolveTargetFile(
@@ -456,7 +463,7 @@ class DownloadFileSystem(private val context: Context) {
             require(cleanName.isNotBlank()) { "Folder name cannot be empty" }
             val parent = resolveFolder(relativeParent)
             val target = File(parent, cleanName)
-            require(target.canonicalPath.startsWith(vaultRoot().canonicalPath)) { "Invalid path" }
+            require(isInsideVault(target)) { "Invalid path" }
             if (!target.exists() && !target.mkdirs()) {
                 error("Could not create folder $cleanName")
             }
@@ -470,7 +477,7 @@ class DownloadFileSystem(private val context: Context) {
             require(clean.isNotBlank()) { "Name cannot be empty" }
             val src = File(absolutePath)
             require(src.exists()) { "File not found" }
-            require(src.canonicalPath.startsWith(vaultRoot().canonicalPath)) { "Access denied" }
+            require(isInsideVault(src)) { "Access denied" }
             val dst = File(src.parentFile ?: vaultRoot(), clean)
             require(!dst.exists()) { "A file or folder named \"$clean\" already exists" }
             check(src.renameTo(dst)) { "Rename failed" }
@@ -480,8 +487,12 @@ class DownloadFileSystem(private val context: Context) {
 
     suspend fun deleteEntry(absolutePath: String): Boolean = withContext(Dispatchers.IO) {
         val target = File(absolutePath)
-        val root = vaultRoot()
-        if (!target.exists() || !target.canonicalPath.startsWith(root.canonicalPath) || target.canonicalPath == root.canonicalPath) {
+        val rootPath = vaultRoot().canonicalPath
+        val targetPath = target.canonicalPath
+        if (!target.exists() ||
+            (targetPath != rootPath && !targetPath.startsWith(rootPath + File.separator)) ||
+            targetPath == rootPath
+        ) {
             return@withContext false
         }
         if (target.isDirectory) target.deleteRecursively() else target.delete()

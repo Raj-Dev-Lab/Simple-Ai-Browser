@@ -57,6 +57,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.rememberAsyncImagePainter
 import com.example.R
 import com.simpleaibrowser.sab.core.browser.EngineInfo
 import com.simpleaibrowser.sab.data.BrowserSettings
@@ -97,8 +98,11 @@ fun SpeedDialStartPage(
             )
     ) {
         if (settings.showWallpaperOnStart && settings.themePreset.isDark && !isPrivate) {
+            // Coil decodes this off the main thread (memory-cached): the start page composes while
+            // the opaque splash overlay is still covering it, so a background decode is invisible
+            // and removes a main-thread hitch from the splash animation window.
             Image(
-                painter = painterResource(id = R.drawable.img_sab_wallpaper),
+                painter = rememberAsyncImagePainter(model = R.drawable.img_sab_wallpaper),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier

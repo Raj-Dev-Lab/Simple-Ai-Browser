@@ -1,14 +1,13 @@
-# Mozilla GeckoView 161+ (`non-omni`, `arm64-v8a`) Engine Guide
+# Mozilla GeckoView 161 Engine Guide
 
 ## Artifact Specification
 
-SAB links directly against Mozilla's official pre-compiled ARM64 non-omni artifact from Mozilla Maven:
+SAB links directly against Mozilla's official pre-compiled **omni** artifact from Mozilla Maven:
 
 - **Repository:** `https://maven.mozilla.org/maven2/`
 - **Coordinate:** `org.mozilla.geckoview:geckoview:161.0.20261118180411`
 - **Minimum SDK:** Android 10 (`minSdk = 29`)
-- **ABI Targets (`ndk.abiFilters`):** `arm64-v8a` (64-bit ARMv8 devices) and `x86_64` (Android emulators)
-- **Variant:** Standard (`non-omni`) — 32-bit `armeabi-v7a` and `x86` libraries are stripped via `abiFilters`.
+- **Variant:** Omni — the single AAR ships native libraries for `arm64-v8a` (64-bit ARMv8 devices) and `x86_64` (Android emulators); the build additionally constrains ABIs via `splits.abi` / `abiFilters`. There is no separate "non-omni" artifact in this project.
 
 ## Runtime Configuration (`GeckoEngineAdapter.kt`)
 

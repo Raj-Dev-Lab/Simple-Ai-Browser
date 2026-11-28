@@ -10,8 +10,8 @@ import com.simpleaibrowser.sab.engine.gecko.GeckoEngineAdapter
 private const val TAG = "SabEngineFactory"
 
 /**
- * Instantiates Mozilla GeckoView 161.0 (non-omni) natively on both
- * arm64-v8a (Android 10+ devices) and x86_64 (emulators).
+ * Instantiates Mozilla GeckoView 161 (omni artifact: arm64-v8a for Android 10+ devices,
+ * x86_64 for emulators) natively.
  * Falls back to CompatWebViewEngine only if an unsupported ABI or native
  * runtime initialization error occurs.
  */

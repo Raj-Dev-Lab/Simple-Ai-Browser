@@ -5,7 +5,7 @@ Thank you for your interest in contributing to **Simple AI Browser (SAB)**!
 ## Engineering Principles
 
 1. **Preserve the Engine Boundary**: Never import `org.mozilla.geckoview.*` or `android.webkit.*` inside `core/browser/` or `ui/`. All engine interactions must pass through `BrowserEngine` and `BrowserTabSession`.
-2. **GeckoView First**: Keep `org.mozilla.geckoview:geckoview-arm64-v8a` (non-omni, 159+) as the primary rendering engine for Android 10+ ARM64 devices.
+2. **GeckoView First**: Keep `org.mozilla.geckoview:geckoview` (official omni artifact, 161+) as the primary rendering engine for Android 10+ `arm64-v8a` and `x86_64`.
 3. **Privacy by Default**: Never add third-party telemetry, analytics SDKs, or unencrypted secret storage.
 4. **Conventional Commits**: Format commit messages using Conventional Commits:
    - `feat(tabs): add drag-to-group tab island gesture`

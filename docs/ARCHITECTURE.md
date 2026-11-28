@@ -2,7 +2,7 @@
 
 ## 1. Architectural Strategy: Opera Mobile Shell × Mozilla GeckoView Engine
 
-Opera Mobile's longevity and responsiveness stem from a **strict separation between the Browser Shell (UI, Tabs, Speed Dial, Privacy Controls) and the Rendering Engine**. SAB replicates this exact production pattern while swapping Chromium/Blink for pre-compiled **Mozilla GeckoView 161+ (`non-omni`, `arm64-v8a` + `x86_64`)**.
+Opera Mobile's longevity and responsiveness stem from a **strict separation between the Browser Shell (UI, Tabs, Speed Dial, Privacy Controls) and the Rendering Engine**. SAB replicates this exact production pattern while swapping Chromium/Blink for pre-compiled **Mozilla GeckoView 161+ (omni artifact, `arm64-v8a` + `x86_64`)**.
 
 ### Layer Breakdown
 
